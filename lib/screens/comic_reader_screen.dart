@@ -102,7 +102,9 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     
     // Ensure s2 server is used
     var chapterUrl = url;
-    if (!chapterUrl.contains('s=s2')) {
+    // (Only for the old rcostation-style sources: on readcomiconline.xyz `?s=`
+    // is WordPress's search parameter and turns the chapter into a 404.)
+    if (!chapterUrl.contains('readcomiconline.xyz') && !chapterUrl.contains('s=s2')) {
       chapterUrl += chapterUrl.contains('?') ? '&s=s2' : '?s=s2';
     }
     
