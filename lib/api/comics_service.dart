@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -83,24 +84,52 @@ class ComicDetails {
   });
 }
 
+/// Thrown when the comics source can't be used, with a human-readable reason
+/// the UI can show (instead of silently returning an empty list).
+class ComicsUnavailableException implements Exception {
+  final String message;
+  ComicsUnavailableException(this.message);
+  @override
+  String toString() => message;
+}
+
 class ComicsService {
   static const String _baseUrl = 'https://rcostation.xyz';
+  static const Duration _timeout = Duration(seconds: 15);
   static const String _likedKey = 'liked_comics';
 
   Future<List<Comic>> getComics({int page = 1}) async {
+    final url = '$_baseUrl/ComicList?page=$page';
+    final http.Response response;
     try {
-      final url = '$_baseUrl/ComicList?page=$page';
-      final response = await http.get(Uri.parse(url), headers: {
+      response = await http.get(Uri.parse(url), headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
-
-      if (response.statusCode == 200) {
-        return _parseComics(response.body);
-      }
+      }).timeout(_timeout);
+    } on TimeoutException {
+      throw ComicsUnavailableException(
+          'rcostation.xyz took too long to respond. The site may be down or blocked on your network.');
     } catch (e) {
       debugPrint('Error fetching comics: $e');
+      throw ComicsUnavailableException(
+          "Couldn't reach rcostation.xyz (${e.runtimeType}). The site may be down, moved to a new domain, or blocked by your network/VPN.");
     }
-    return [];
+
+    if (response.statusCode != 200) {
+      final blocked = response.statusCode == 403 || response.statusCode == 503;
+      throw ComicsUnavailableException(blocked
+          ? 'rcostation.xyz refused the request (HTTP ${response.statusCode}) — it is probably showing a bot-check page.'
+          : 'rcostation.xyz returned HTTP ${response.statusCode}.');
+    }
+
+    final comics = _parseComics(response.body);
+    if (comics.isEmpty && page == 1) {
+      final body = response.body.toLowerCase();
+      final challenge = body.contains('just a moment') || body.contains('cloudflare');
+      throw ComicsUnavailableException(challenge
+          ? 'rcostation.xyz returned a bot-check page instead of the comic list.'
+          : 'rcostation.xyz loaded but no comics could be read from it — the site layout has probably changed.');
+    }
+    return comics;
   }
 
   Future<List<Comic>> searchComics(String query) async {
@@ -132,8 +161,8 @@ class ComicsService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: 'keyword=$query',
-      );
+        body: 'keyword=${Uri.encodeQueryComponent(query)}',
+      ).timeout(_timeout);
 
       if (response.statusCode == 200) {
         return _parseComics(response.body);
@@ -159,7 +188,7 @@ class ComicsService {
       
       final response = await http.get(Uri.parse(url), headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
+      }).timeout(_timeout);
 
       if (response.statusCode != 200) return null;
 
@@ -248,7 +277,7 @@ class ComicsService {
       // decoder (beau/baeu from rguard.min.js) directly in Dart.
       final response = await http.get(Uri.parse(url), headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
+      }).timeout(_timeout);
 
       if (response.statusCode != 200) {
         throw Exception('Chapter page returned HTTP ${response.statusCode}');

@@ -117,11 +117,48 @@ class MusicService {
   final Map<String, String> _videoIdCache = {};
   final Map<String, _CachedUrl> _streamUrlCache = {};
 
-  /// Generic retry wrapper — retries up to [maxRetries] times with exponential backoff
-  Future<T> _withRetry<T>(Future<T> Function() fn, T fallback, {int maxRetries = 5}) async {
+  static const _requestTimeout = Duration(seconds: 8);
+  static const _headers = {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+  };
+
+  /// GET + decode a Deezer JSON response. Every request has a hard timeout
+  /// (previously there was none, so a stalled connection left the Music page
+  /// on its loading shimmer forever) and Deezer's in-body error objects
+  /// (e.g. quota exceeded, returned with HTTP 200) are surfaced as errors
+  /// instead of crashing later on a null cast.
+  Future<Map<String, dynamic>> _getJson(Uri uri) async {
+    final response =
+        await http.get(uri, headers: _headers).timeout(_requestTimeout);
+    if (response.statusCode != 200) {
+      throw Exception('Deezer HTTP ${response.statusCode}');
+    }
+    final decoded = json.decode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('Unexpected Deezer response shape');
+    }
+    if (decoded['error'] != null) {
+      throw Exception('Deezer error: ${decoded['error']}');
+    }
+    return decoded;
+  }
+
+  /// Generic retry wrapper — retries up to [maxRetries] times with backoff.
+  /// If [rethrowOnFailure] is true and every attempt threw, the last error is
+  /// rethrown so the UI can show an error state instead of an empty page.
+  Future<T> _withRetry<T>(
+    Future<T> Function() fn,
+    T fallback, {
+    int maxRetries = 3,
+    bool rethrowOnFailure = false,
+  }) async {
+    Object? lastError;
     for (var attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         final result = await fn();
+        lastError = null;
         // For lists, treat empty as "no data" and retry
         if (result is List && result.isEmpty && attempt < maxRetries) {
           debugPrint('MusicService: Attempt $attempt returned empty, retrying...');
@@ -130,86 +167,59 @@ class MusicService {
         }
         return result;
       } catch (e) {
+        lastError = e;
         debugPrint('MusicService: Attempt $attempt failed: $e');
         if (attempt < maxRetries) {
           await Future.delayed(Duration(milliseconds: 300 * attempt));
         }
       }
     }
+    if (rethrowOnFailure && lastError != null) throw lastError;
     return fallback;
   }
 
   Future<List<MusicTrack>> searchTracks(String query) => _withRetry(() async {
-    final targetUri = Uri.https('api.deezer.com', '/search', {'q': query});
-    
-    final response = await http.get(targetUri);
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final items = data['data'] as List;
-      return items.map((item) => MusicTrack.fromJson(item)).toList();
-    }
-    return <MusicTrack>[];
+    final data = await _getJson(Uri.https('api.deezer.com', '/search', {'q': query}));
+    final items = (data['data'] as List?) ?? const [];
+    return items.map((item) => MusicTrack.fromJson(item)).toList();
   }, <MusicTrack>[]);
 
   Future<List<MusicTrack>> getTrendingTracks({int index = 0, int limit = 20}) => _withRetry(() async {
-    final targetUri = Uri.https('api.deezer.com', '/chart/0/tracks', {
+    final data = await _getJson(Uri.https('api.deezer.com', '/chart/0/tracks', {
       'index': index.toString(),
       'limit': limit.toString(),
-    });
-    
-    final response = await http.get(targetUri);
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final items = data['data'] as List;
-      return items.map((item) => MusicTrack.fromJson(item)).toList();
-    }
-    return <MusicTrack>[];
-  }, <MusicTrack>[]);
+    }));
+    final items = (data['data'] as List?) ?? const [];
+    return items.map((item) => MusicTrack.fromJson(item)).toList();
+  }, <MusicTrack>[], rethrowOnFailure: true);
 
   Future<List<MusicAlbum>> searchAlbums(String query) => _withRetry(() async {
-    final targetUri = Uri.https('api.deezer.com', '/search/album', {'q': query});
-    
-    final response = await http.get(targetUri);
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final albums = data['data'] as List;
-      return albums.map((item) => MusicAlbum.fromJson(item)).toList();
-    }
-    return <MusicAlbum>[];
+    final data = await _getJson(Uri.https('api.deezer.com', '/search/album', {'q': query}));
+    final albums = (data['data'] as List?) ?? const [];
+    return albums.map((item) => MusicAlbum.fromJson(item)).toList();
   }, <MusicAlbum>[]);
 
   Future<List<MusicTrack>> getAlbumTracks(String albumId) => _withRetry(() async {
-    final targetUrl = 'https://api.deezer.com/album/$albumId';
-    
-    final albumResponse = await http.get(Uri.parse(targetUrl));
-    if (albumResponse.statusCode == 200) {
-      final albumData = json.decode(albumResponse.body);
-      final items = albumData['tracks']['data'] as List;
-      
-      return items.map((trackJson) {
-         trackJson['album'] = {
-           'title': albumData['title'],
-           'cover_xl': albumData['cover_xl'],
-           'cover_big': albumData['cover_big'],
-           'cover_medium': albumData['cover_medium'],
-           'cover_small': albumData['cover_small'],
-         };
-         return MusicTrack.fromJson(trackJson);
-      }).toList();
-    }
-    return <MusicTrack>[];
+    final albumData = await _getJson(Uri.https('api.deezer.com', '/album/$albumId'));
+    final items = (albumData['tracks']?['data'] as List?) ?? const [];
+
+    return items.map((trackJson) {
+       trackJson['album'] = {
+         'title': albumData['title'],
+         'cover_xl': albumData['cover_xl'],
+         'cover_big': albumData['cover_big'],
+         'cover_medium': albumData['cover_medium'],
+         'cover_small': albumData['cover_small'],
+       };
+       return MusicTrack.fromJson(trackJson);
+    }).toList();
   }, <MusicTrack>[]);
 
   Future<List<MusicTrack>> getRelatedTracks(String trackId) => _withRetry(() async {
-    final targetUrl = 'https://api.deezer.com/track/$trackId/related';
-    
-    final response = await http.get(Uri.parse(targetUrl));
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final items = data['data'];
-      if (items is List) {
-        return items.map((item) => MusicTrack.fromJson(item)).toList();
-      }
+    final data = await _getJson(Uri.https('api.deezer.com', '/track/$trackId/related'));
+    final items = data['data'];
+    if (items is List) {
+      return items.map((item) => MusicTrack.fromJson(item)).toList();
     }
     return <MusicTrack>[];
   }, <MusicTrack>[]);

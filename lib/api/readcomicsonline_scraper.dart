@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -25,6 +26,7 @@ class ReadComicsOnlineScraper {
       '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
   static const String sourceTag = 'rcoru';
+  static const Duration _timeout = Duration(seconds: 15);
 
   /// Returns true if the given URL belongs to this scraper's source.
   static bool ownsUrl(String url) {
@@ -40,7 +42,7 @@ class ReadComicsOnlineScraper {
     try {
       final uri = Uri.parse('$baseUrl/search')
           .replace(queryParameters: {'query': query});
-      final res = await http.get(uri, headers: {'User-Agent': _ua});
+      final res = await http.get(uri, headers: {'User-Agent': _ua}).timeout(_timeout);
       if (res.statusCode != 200) return [];
 
       final body = json.decode(res.body);
@@ -74,7 +76,7 @@ class ReadComicsOnlineScraper {
   /// Detail page: extracts metadata + full chapter list.
   static Future<ComicDetails?> getComicDetails(Comic comic) async {
     try {
-      final res = await http.get(Uri.parse(comic.url), headers: {'User-Agent': _ua});
+      final res = await http.get(Uri.parse(comic.url), headers: {'User-Agent': _ua}).timeout(_timeout);
       if (res.statusCode != 200) return null;
 
       final doc = hp.parse(res.body);
@@ -164,7 +166,7 @@ class ReadComicsOnlineScraper {
   /// Chapter pages: parses <img data-src="..."> from the reader page and
   /// wraps each URL with the local comic-proxy.
   static Future<List<String>> getChapterPages(String chapterUrl) async {
-    final res = await http.get(Uri.parse(chapterUrl), headers: {'User-Agent': _ua});
+    final res = await http.get(Uri.parse(chapterUrl), headers: {'User-Agent': _ua}).timeout(_timeout);
     if (res.statusCode != 200) {
       throw Exception('Chapter page returned HTTP ${res.statusCode}');
     }

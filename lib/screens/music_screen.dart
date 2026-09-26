@@ -40,6 +40,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   List<MusicTrack> _selectedAlbumTracks = [];
 
   bool _isLoading = false;
+  bool _loadFailed = false;
   int _currentMusicOffset = 0;
   final int _musicLimit = 20;
   String _downloadedSearchQuery = '';
@@ -88,12 +89,22 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
   Future<void> _loadTrendingTracks() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
-    final tracks = await _musicService.getTrendingTracks(index: _currentMusicOffset, limit: _musicLimit);
+    setState(() {
+      _isLoading = true;
+      _loadFailed = false;
+    });
+    List<MusicTrack> tracks = _trendingTracks;
+    var failed = false;
+    try {
+      tracks = await _musicService.getTrendingTracks(index: _currentMusicOffset, limit: _musicLimit);
+    } catch (_) {
+      failed = true; // network down / blocked / Deezer error after retries
+    }
     if (!mounted) return;
     setState(() {
       _trendingTracks = tracks;
-      _isLoading = false;
+      _loadFailed = failed;
+      _isLoading = false; // always clear the spinner
     });
   }
 
@@ -514,6 +525,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
     switch (_currentView) {
       case MusicView.main:
+        if (_loadFailed && _trendingTracks.isEmpty) return _buildLoadError();
         return _buildTrendingView();
       case MusicView.playlists:
         return _buildPlaylistsView();
@@ -530,6 +542,31 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       case MusicView.albumDetail:
         return _buildAlbumDetail();
     }
+  }
+
+  Widget _buildLoadError() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.wifi_off_rounded, size: 48, color: Colors.white38),
+          const SizedBox(height: 16),
+          const Text("Couldn't load music", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text(
+            'The music service (api.deezer.com) did not respond. Check your connection, VPN or firewall, then try again.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white54),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: _loadTrendingTracks,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ─────────────────────────────────────────────

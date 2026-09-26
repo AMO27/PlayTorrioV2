@@ -337,8 +337,26 @@ class MusicPlayerService {
     playTrack(playlist.value[_currentIndex]);
   }
 
+  bool _disposed = false;
+
   void dispose() {
-    _player.dispose();
-    _musicService.dispose();
+    unawaited(disposePlayer());
+  }
+
+  /// Stops playback and releases the native mpv instance. Called on app
+  /// close — before this existed the music player was never disposed, so its
+  /// native threads were still running while the process tried to exit.
+  Future<void> disposePlayer() async {
+    if (_disposed) return;
+    _disposed = true;
+    try {
+      await _player.stop();
+    } catch (_) {}
+    try {
+      await _player.dispose();
+    } catch (_) {}
+    try {
+      _musicService.dispose();
+    } catch (_) {}
   }
 }

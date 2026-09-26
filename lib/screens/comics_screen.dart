@@ -24,6 +24,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
   List<String> _likedUrls = [];
   List<Map<String, dynamic>> _history = [];
   bool _isLoading = true;
+  String? _errorMessage;
   int _currentPage = 1;
   bool _isShowingLiked = false;
   String _currentSearchQuery = '';
@@ -99,11 +100,21 @@ class _ComicsScreenState extends State<ComicsScreen> {
     setState(() {
       _isLoading = true;
       _isShowingLiked = false;
+      _errorMessage = null;
     });
-    final comics = await _comicsService.getComics(page: _currentPage);
+    List<Comic> comics = [];
+    String? error;
+    try {
+      comics = await _comicsService.getComics(page: _currentPage);
+    } on ComicsUnavailableException catch (e) {
+      error = e.message;
+    } catch (e) {
+      error = 'Unexpected error loading comics: $e';
+    }
     if (!mounted) return;
     setState(() {
       _comics = comics;
+      _errorMessage = error;
       _isLoading = false;
     });
     _scrollToTop();
@@ -410,9 +421,28 @@ class _ComicsScreenState extends State<ComicsScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              _isShowingLiked ? 'No liked comics yet' : 'No comics found',
+              _isShowingLiked
+                  ? 'No liked comics yet'
+                  : (_errorMessage != null ? "Couldn't load comics" : 'No comics found'),
               style: const TextStyle(color: Colors.white70, fontSize: 18),
             ),
+            if (_errorMessage != null && !_isShowingLiked) ...[
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  _errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white54, fontSize: 14),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _fetchComics,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
           ],
         ),
       ),

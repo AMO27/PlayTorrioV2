@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/material.dart';
+import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
@@ -27,6 +29,15 @@ import 'utils/app_theme.dart';
 import 'screens/main_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/discover_screen.dart';
+
+/// Runs on its own isolate during shutdown. If the app is still alive after
+/// the grace period (a native call hung), terminate the process. Process.killPid
+/// maps to TerminateProcess on Windows, which skips C-runtime/DLL teardown —
+/// avoiding the exit(0) assertion race the old comments describe.
+void _killAfterDelay(int targetPid) {
+  sleep(const Duration(seconds: 10));
+  Process.killPid(targetPid, ProcessSignal.sigkill);
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -171,50 +182,85 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
     final bool isPreventClose = await windowManager.isPreventClose();
     if (!isPreventClose) return;
 
-    // Graceful shutdown — calling exit(0) while libtorrent / media_kit (mpv)
-    // / WebView2 native threads are still running races their teardown and
-    // produces the Windows "system error unknown hard error" dialog
-    // (STATUS_ASSERTION_FAILURE in ntdll). Dispose the heavy native plugins
-    // first, then ask windowManager to destroy the window which lets Flutter
-    // shut down its engine cleanly.
+    // Ignore repeated clicks on the X button while shutdown is in progress.
+    if (_closing) return;
+    _closing = true;
+
+    // Hide the window right away so the app *looks* closed instantly, even if
+    // native teardown below takes a moment.
     try {
-      await PlayerPoolService().dispose();
+      await windowManager.hide();
     } catch (_) {}
-    try {
-      await TorrentStreamService().cleanup();
-    } catch (_) {}
-    try {
-      // Stop any running 111477 proxy. Cache deletion happens AFTER
-      // PlayerPoolService.dispose() above so that media_kit / MPV has
-      // released its file handle on the proxy connection — otherwise
-      // Windows pending-delete keeps the cache files around.
+
+    // Safety net: a watchdog on a SEPARATE isolate. Native teardown calls
+    // (libtorrent session destroy, mpv dispose) are synchronous FFI calls that
+    // can block this isolate, so a Timer here could never fire. If the process
+    // is still alive after the grace period, the watchdog terminates it.
+    _startKillWatchdog();
+
+    // Ordered shutdown. Every step is time-limited so one stuck component can
+    // no longer freeze the whole close (the old code awaited each step with
+    // no limit, which is why the window hung until killed in Task Manager).
+    // Order matters: stop the media players (mpv) first so they release file
+    // handles / network connections, then the torrent engine, then servers.
+    await _step('music player', () => MusicPlayerService().disposePlayer());
+    await _step('audiobook player', () async => AudiobookPlayerService().dispose());
+    await _step('player pool', () => PlayerPoolService().dispose());
+    await _step('torrent streams', () => TorrentStreamService().cleanup());
+    await _step('111477 proxy', () async {
+      // Stop any running 111477 proxy. Cache deletion happens AFTER the
+      // players above are disposed so MPV has released its file handle.
       if (site111477_proxy.is111477ProxyRunning) {
         await site111477_proxy.stop111477Proxy();
       }
-    } catch (_) {}
-    try {
-      // Fire-and-forget — WebView2 cache wipe must not block close.
-      unawaited(WebViewCleanup.cleanupWebView2Cache());
-    } catch (_) {}
+    });
+    await _step('local server', () => LocalServerService().stop());
+    unawaited(_step('webview cache', () => WebViewCleanup.cleanupWebView2Cache()));
 
-    // Small grace period so background threads can unwind before the process
-    // image gets torn down.
+    // Small grace period so background threads can unwind.
     await Future.delayed(const Duration(milliseconds: 250));
 
-    // Final cache wipe AFTER the grace period — by now any lingering MPV
-    // file handle on the proxy stream is gone, so Windows will let us
-    // actually delete the on-disk cache files.
-    try {
-      await site111477_proxy.purge111477Cache();
-    } catch (_) {}
+    await _step('111477 cache purge', () => site111477_proxy.purge111477Cache());
+
+    // Last: tear down the native libtorrent session. This was never called
+    // before, so its 200 ms poll timer kept hitting a half-destroyed engine
+    // during exit (the lag + crash). It is a synchronous native call, which is
+    // why the window is already hidden and the watchdog is already armed.
+    await _step('torrent engine', () async {
+      if (LibtorrentFlutter.isInitialized) {
+        await LibtorrentFlutter.instance.dispose();
+      }
+    });
 
     try {
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
     } catch (_) {
-      // Last-resort fallback if windowManager is in a bad state.
       exit(0);
     }
+    // If Flutter's normal exit path leaves the process alive, the watchdog
+    // isolate ends it.
+  }
+
+  bool _closing = false;
+
+  /// Runs one shutdown step, never letting it throw or hang the close.
+  Future<void> _step(String name, Future<void> Function() action,
+      {Duration limit = const Duration(seconds: 2)}) async {
+    try {
+      await action().timeout(limit);
+    } on TimeoutException {
+      debugPrint('[Shutdown] "$name" timed out after ${limit.inSeconds}s — skipping');
+    } catch (e) {
+      debugPrint('[Shutdown] "$name" failed: $e');
+    }
+  }
+
+  void _startKillWatchdog() {
+    Isolate.spawn<int>(_killAfterDelay, pid).catchError((Object e) {
+      debugPrint('[Shutdown] could not start watchdog: $e');
+      return Isolate.current;
+    });
   }
 
   @override
