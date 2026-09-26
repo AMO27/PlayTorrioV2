@@ -16,9 +16,27 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          cache: true
       - run: flutter --version
       - run: flutter pub get
+      # Same workaround the project's own release workflow (build.yml) uses:
+      # download libtorrent_flutter's prebuilt Windows native lib ahead of time
+      # so the CMake step doesn't hit its symlink bug.
+      - name: Pre-extract libtorrent_flutter native lib
+        shell: pwsh
+        run: |
+          $root = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { "$env:LOCALAPPDATA\Pub\Cache" }
+          $pubCache = Join-Path $root "hosted\pub.dev"
+          $pkgPath = Get-ChildItem -Path $pubCache -Filter "libtorrent_flutter-*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($pkgPath) {
+            $version = ($pkgPath.Name -split '-')[1]
+            $url = "https://github.com/ayman708-UX/libtorrent_flutter/releases/download/v$version/windows-native-lib-x64.zip"
+            $zipPath = "$env:TEMP\libtorrent.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zipPath
+            $prebuiltDir = "$($pkgPath.FullName)\prebuilt\windows"
+            New-Item -ItemType Directory -Force -Path $prebuiltDir
+            Expand-Archive -Path $zipPath -DestinationPath $prebuiltDir -Force
+            Write-Host "Pre-extracted libtorrent_flutter native lib to $prebuiltDir"
+          }
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - run: flutter build windows --release
       - uses: actions/upload-artifact@v4
