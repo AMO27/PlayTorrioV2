@@ -265,15 +265,17 @@ class MusicService {
   }
 
   /// Fast stream URL fetching for playback — uses shared instance for cookie persistence
-  Future<String?> getYoutubeStreamUrl(String videoId) async {
+  void forgetStreamUrl(String videoId) => _streamUrlCache.remove(videoId);
+
+  Future<String?> getYoutubeStreamUrl(String videoId, {bool skipFastPath = false}) async {
     final cached = _streamUrlCache[videoId];
-    if (cached != null && !cached.isExpired) {
+    if (!skipFastPath && cached != null && !cached.isExpired) {
       debugPrint('MusicService: Stream URL cache hit');
       return cached.url;
     }
 
     // Fast path: direct InnerTube call (ported from PlayTorrio TV).
-    try {
+    if (!skipFastPath) try {
       final fastUrl =
           await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
       if (fastUrl != null) {

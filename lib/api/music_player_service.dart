@@ -33,6 +33,8 @@ class MusicPlayerService {
   final ValueNotifier<Duration> position = ValueNotifier<Duration>(Duration.zero);
   final ValueNotifier<Duration> duration = ValueNotifier<Duration>(Duration.zero);
   final ValueNotifier<bool> isBuffering = ValueNotifier<bool>(false);
+  /// Non-null when the last play attempt failed; the UI shows it once.
+  final ValueNotifier<String?> playbackError = ValueNotifier<String?>(null);
   final ValueNotifier<bool> isShuffleEnabled = ValueNotifier<bool>(false);
   final ValueNotifier<PlaylistMode> loopMode = ValueNotifier<PlaylistMode>(PlaylistMode.none);
   final ValueNotifier<bool> isFullScreenVisible = ValueNotifier<bool>(false);
@@ -52,27 +54,33 @@ class MusicPlayerService {
     if (_initialized) return;
     _initialized = true;
     
-    // Configure audio session
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
+    // Configure audio session. Best-effort: audio_session has no native
+    // implementation on every desktop platform, and if this threw, init()
+    // aborted here and the player listeners below were never attached (so the
+    // UI never learned the player state).
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
 
-    // Listen for interruptions (Phone calls, other apps starting media)
-    session.interruptionEventStream.listen((event) {
-      if (event.begin) {
-        switch (event.type) {
-          case AudioInterruptionType.duck:
-            // Optional: Lower volume
-            break;
-          case AudioInterruptionType.pause:
-          case AudioInterruptionType.unknown:
-            pause();
-            break;
+      // Listen for interruptions (Phone calls, other apps starting media)
+      session.interruptionEventStream.listen((event) {
+        if (event.begin) {
+          switch (event.type) {
+            case AudioInterruptionType.duck:
+              break;
+            case AudioInterruptionType.pause:
+            case AudioInterruptionType.unknown:
+              pause();
+              break;
+          }
         }
-      }
-    });
+      });
 
-    // Listen for "becoming noisy" (Headphones unplugged)
-    session.becomingNoisyEventStream.listen((_) => pause());
+      // Listen for "becoming noisy" (Headphones unplugged)
+      session.becomingNoisyEventStream.listen((_) => pause());
+    } catch (e) {
+      debugPrint('MusicPlayerService: audio session unavailable (continuing): $e');
+    }
 
     // Initialize storage notifiers
     await _storageService.init();
@@ -130,9 +138,14 @@ class MusicPlayerService {
     final generation = ++_playGeneration; // Cancel any in-flight extraction
     try {
       // 0. Set session active immediately
-      final session = await AudioSession.instance;
-      final sessionOk = await session.setActive(true);
-      debugPrint('MusicPlayerService: audio session active=$sessionOk');
+      try {
+        final session = await AudioSession.instance;
+        final sessionOk = await session.setActive(true);
+        debugPrint('MusicPlayerService: audio session active=$sessionOk');
+      } catch (e) {
+        debugPrint('MusicPlayerService: audio session unavailable (continuing): $e');
+      }
+      playbackError.value = null;
 
       debugPrint('MusicPlayerService: stopping previous playback');
       await _player.stop();
@@ -190,49 +203,84 @@ class MusicPlayerService {
         }
       }
 
-      // 2. YouTube Match (cached + runs in background isolate)
+      // 2. YouTube Match (time-limited so the UI can never wait forever)
       debugPrint('MusicPlayerService: resolving videoId for "${track.title}" / "${track.artist}"');
-      final videoId = await _musicService.getYoutubeVideoId(track.title, track.artist);
+      final videoId = await _musicService
+          .getYoutubeVideoId(track.title, track.artist)
+          .timeout(const Duration(seconds: 20), onTimeout: () => null);
       if (_playGeneration != generation) {
         debugPrint('MusicPlayerService: Cancelled (after videoId) — newer track requested');
         return;
       }
       if (videoId == null) {
-        debugPrint('MusicPlayerService: No YouTube match');
+        _failPlayback(generation, "Couldn't find this song on YouTube. Try another song or check your connection.");
         return;
       }
       debugPrint('MusicPlayerService: videoId=$videoId');
 
-      // 3. Stream URL (cached + runs in background isolate)
-      final streamUrl = await _musicService.getYoutubeStreamUrl(videoId);
-      if (_playGeneration != generation) {
-        debugPrint('MusicPlayerService: Cancelled (after streamUrl) — newer track requested');
-        return;
-      }
-      if (streamUrl == null || streamUrl.isEmpty) {
-        debugPrint('MusicPlayerService: Failed to get stream URL (null/empty)');
-        return;
-      }
-      final preview = streamUrl.length > 120 ? '${streamUrl.substring(0, 120)}…' : streamUrl;
-      debugPrint('MusicPlayerService: streamUrl=$preview');
+      // 3. Stream URL, then VERIFY it really plays. A URL that mpv can't fetch
+      // leaves the player "buffering" forever, so if no audio starts we retry
+      // once with the fallback extractor, then report a clear error.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final streamUrl = await _musicService
+            .getYoutubeStreamUrl(videoId, skipFastPath: attempt > 0)
+            .timeout(const Duration(seconds: 25), onTimeout: () => null);
+        if (_playGeneration != generation) {
+          debugPrint('MusicPlayerService: Cancelled (after streamUrl) — newer track requested');
+          return;
+        }
+        if (streamUrl == null || streamUrl.isEmpty) {
+          debugPrint('MusicPlayerService: no stream URL on attempt ${attempt + 1}');
+          continue;
+        }
+        final preview = streamUrl.length > 120 ? '${streamUrl.substring(0, 120)}…' : streamUrl;
+        debugPrint('MusicPlayerService: streamUrl=$preview');
 
-      try {
-        debugPrint('MusicPlayerService: calling player.open()');
-        await _player.open(Media(streamUrl));
-        debugPrint('MusicPlayerService: open() returned, playing=${_player.state.playing}');
-      } catch (e, st) {
-        debugPrint('MusicPlayerService: open() THREW: $e\n$st');
-        rethrow;
+        final started = await _openAndVerify(streamUrl, generation);
+        if (_playGeneration != generation) return;
+        if (started) {
+          _prefetchNext();
+          return;
+        }
+        debugPrint('MusicPlayerService: playback did not start on attempt ${attempt + 1}');
+        _musicService.forgetStreamUrl(videoId);
       }
-      _prefetchNext();
-      
+      _failPlayback(generation,
+          "Couldn't start playback — YouTube didn't return a stream that plays. Try another song, or try again later.");
+
     } catch (e, st) {
       debugPrint('MusicPlayerService: Error playing track: $e\n$st');
+      _failPlayback(generation, 'Playback error: $e');
     } finally {
       Future.delayed(const Duration(milliseconds: 1500), () {
         _isLoadingTrack = false;
       });
     }
+  }
+
+  /// Opens [url] and waits (up to 20 s) for audio to actually start.
+  Future<bool> _openAndVerify(String url, int generation) async {
+    try {
+      await _player.open(Media(url)).timeout(const Duration(seconds: 20));
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (DateTime.now().isBefore(deadline)) {
+        if (_playGeneration != generation) return false;
+        if (_player.state.position > Duration.zero) return true;
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+    } catch (e) {
+      debugPrint('MusicPlayerService: open/verify failed: $e');
+    }
+    return false;
+  }
+
+  /// Stops the spinner and tells the UI why playback failed.
+  void _failPlayback(int generation, String message) {
+    if (_playGeneration != generation) return; // a newer track took over
+    debugPrint('MusicPlayerService: FAILED — $message');
+    playbackError.value = message;
+    isBuffering.value = false;
+    _player.stop().catchError((_) {});
   }
 
   void _fetchLyricsForTrack(MusicTrack track) async {

@@ -64,10 +64,24 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     WidgetsBinding.instance.addObserver(this);
     _loadUserData();
     _loadTrendingTracks();
+    _playerService.playbackError.addListener(_onPlaybackError);
+  }
+
+  /// Shows why a song failed to start instead of leaving the player spinning.
+  void _onPlaybackError() {
+    final message = _playerService.playbackError.value;
+    if (message == null || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+      ));
   }
 
   @override
   void dispose() {
+    _playerService.playbackError.removeListener(_onPlaybackError);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
