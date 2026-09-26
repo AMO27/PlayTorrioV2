@@ -98,7 +98,30 @@ class ComicsService {
   static const Duration _timeout = Duration(seconds: 15);
   static const String _likedKey = 'liked_comics';
 
+  /// Main listing. readcomicsonline.ru is the primary source; rcostation.xyz
+  /// (which no longer resolves) is kept only as a fallback in case it returns.
   Future<List<Comic>> getComics({int page = 1}) async {
+    ComicsUnavailableException? primaryError;
+    try {
+      final comics = await ReadComicsOnlineScraper.getComics(page: page);
+      if (comics.isNotEmpty) return comics;
+      if (page > 1) return comics; // ran past the last page
+    } on ComicsUnavailableException catch (e) {
+      primaryError = e;
+    } catch (e) {
+      primaryError = ComicsUnavailableException('Unexpected error: $e');
+    }
+
+    try {
+      return await _getComicsRco(page: page);
+    } on ComicsUnavailableException {
+      // Report the primary source's reason — the fallback is known-dead.
+      throw primaryError ??
+          ComicsUnavailableException('No comics source is reachable right now.');
+    }
+  }
+
+  Future<List<Comic>> _getComicsRco({int page = 1}) async {
     final url = '$_baseUrl/ComicList?page=$page';
     final http.Response response;
     try {
