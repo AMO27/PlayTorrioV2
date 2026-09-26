@@ -450,7 +450,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
                   ),
                   OutlinedButton.icon(
                     onPressed: () => launchUrl(
-                      Uri.parse('https://readcomicsonline.ru/'),
+                      Uri.parse('https://readcomiconline.xyz/'),
                       mode: LaunchMode.externalApplication,
                     ),
                     icon: const Icon(Icons.open_in_browser),

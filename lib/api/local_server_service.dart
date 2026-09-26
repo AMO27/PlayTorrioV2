@@ -203,7 +203,9 @@ class LocalServerService {
     String referer = 'https://rcostation.xyz/';
     try {
       final host = Uri.parse(targetUrl).host;
-      if (host.contains('readcomicsonline.ru')) {
+      if (host.contains('readcomiconline.xyz') || host.endsWith('wp.com')) {
+        referer = 'https://readcomiconline.xyz/';
+      } else if (host.contains('readcomicsonline.ru')) {
         referer = 'https://readcomicsonline.ru/';
       } else if (host.contains('readcomiconline.li')) {
         referer = 'https://readcomiconline.li/';

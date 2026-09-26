@@ -16,7 +16,7 @@ class Comic {
   final String publication;
   final String summary;
   /// Source tag identifying which scraper produced this comic.
-  /// '' or 'rco' = rcostation.xyz (default), 'rcoru' = readcomicsonline.ru.
+  /// '' or 'rco' = rcostation.xyz (default), 'rcoxyz' = readcomiconline.xyz.
   final String source;
 
   Comic({
@@ -98,7 +98,7 @@ class ComicsService {
   static const Duration _timeout = Duration(seconds: 15);
   static const String _likedKey = 'liked_comics';
 
-  /// Main listing. readcomicsonline.ru is the primary source; rcostation.xyz
+  /// Main listing. readcomiconline.xyz is the primary source; rcostation.xyz
   /// (which no longer resolves) is kept only as a fallback in case it returns.
   Future<List<Comic>> getComics({int page = 1}) async {
     ComicsUnavailableException? primaryError;
