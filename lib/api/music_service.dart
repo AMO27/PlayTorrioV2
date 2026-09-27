@@ -329,7 +329,19 @@ class MusicService {
       return cached.url;
     }
 
-    // Fast path: direct InnerTube call (ported from PlayTorrio TV).
+    // First choice: yt-dlp (shipped next to the exe on Windows). The
+    // in-app InnerTube extractor below is already known to get blocked on
+    // this network, so trying it first only burns time before falling
+    // back — go straight to the one that actually works.
+    final dlpUrl = await _ytDlpStreamUrl(videoId);
+    if (dlpUrl != null) {
+      _streamUrlCache[videoId] = _CachedUrl(dlpUrl);
+      debugPrint('MusicService: Got stream URL via yt-dlp');
+      return dlpUrl;
+    }
+
+    // Fast path: direct InnerTube call (ported from PlayTorrio TV). Kept as
+    // a fallback for platforms without yt-dlp (yt-dlp is Windows-only).
     if (!skipFastPath) try {
       final fastUrl =
           await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
@@ -340,15 +352,6 @@ class MusicService {
       }
     } catch (e) {
       debugPrint('MusicService: Fast extractor failed: $e');
-    }
-
-    // Second choice: yt-dlp (shipped next to the exe), which is updated
-    // quickly whenever YouTube changes how it hands out streams.
-    final dlpUrl = await _ytDlpStreamUrl(videoId);
-    if (dlpUrl != null) {
-      _streamUrlCache[videoId] = _CachedUrl(dlpUrl);
-      debugPrint('MusicService: Got stream URL via yt-dlp');
-      return dlpUrl;
     }
 
     // Fallback: youtube_explode_dart.

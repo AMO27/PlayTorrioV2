@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -58,6 +59,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
   bool get _isDesktop => (Platform.isWindows || Platform.isLinux || Platform.isMacOS) && MediaQuery.of(context).size.width > 900;
 
+  StreamSubscription<DownloadResultEvent>? _downloadResultSub;
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +68,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     _loadUserData();
     _loadTrendingTracks();
     _playerService.playbackError.addListener(_onPlaybackError);
+    _downloadResultSub = _downloader.onResult.listen(_onDownloadResult);
   }
 
   /// Shows why a song failed to start instead of leaving the player spinning.
@@ -79,10 +83,25 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       ));
   }
 
+  /// Surfaces whether a queued download actually succeeded once it finishes,
+  /// since the "added to queue" snackbar only means it was accepted.
+  void _onDownloadResult(DownloadResultEvent event) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(event.success
+          ? 'Downloaded: ${event.track.title}'
+          : 'Download failed: ${event.track.title}'),
+      backgroundColor: event.success ? AppTheme.bgCard : Colors.red.shade900,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
+  }
+
   @override
   void dispose() {
     _playerService.playbackError.removeListener(_onPlaybackError);
     WidgetsBinding.instance.removeObserver(this);
+    _downloadResultSub?.cancel();
     super.dispose();
   }
 

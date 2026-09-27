@@ -1,13 +1,24 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:collection';
 import 'package:flutter/foundation.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 import 'music_service.dart';
 import 'music_storage_service.dart';
 import 'lyrics_service.dart';
+
+/// Emitted whenever a queued download finishes, successfully or not, so UI
+/// screens can surface a snackbar even though the actual work happens later,
+/// asynchronously, after the "added to queue" response.
+class DownloadResultEvent {
+  final MusicTrack track;
+  final bool success;
+  final String? error;
+
+  const DownloadResultEvent({required this.track, required this.success, this.error});
+}
 
 class MusicDownloaderService {
   static final MusicDownloaderService _instance = MusicDownloaderService._internal();
@@ -22,6 +33,14 @@ class MusicDownloaderService {
   final Queue<MusicTrack> _queue = Queue<MusicTrack>();
   final Set<String> _activeDownloadIds = {};
   bool _isProcessing = false;
+
+  final StreamController<DownloadResultEvent> _resultsController =
+      StreamController<DownloadResultEvent>.broadcast();
+
+  /// Subscribe to get notified when a download finishes or fails, e.g. to
+  /// show a snackbar. The initial "queued" response from [downloadTrack]
+  /// only tells you it was accepted, not whether it ultimately succeeded.
+  Stream<DownloadResultEvent> get onResult => _resultsController.stream;
 
   Future<bool> downloadTrack(MusicTrack track) async {
     // 1. Check if already downloaded
@@ -61,8 +80,10 @@ class MusicDownloaderService {
 
     try {
       await _executeDownload(track);
+      _resultsController.add(DownloadResultEvent(track: track, success: true));
     } catch (e) {
       debugPrint('[Downloader] Error processing ${track.title}: $e');
+      _resultsController.add(DownloadResultEvent(track: track, success: false, error: e.toString()));
     } finally {
       _activeDownloadIds.remove(track.id);
       _processQueue(); // Process next in queue
@@ -82,11 +103,12 @@ class MusicDownloaderService {
       final videoId = await _musicService.getYoutubeVideoId(track.title, track.artist);
       if (videoId == null) throw Exception('No YouTube match found');
 
-      // 3. Get manifest
-      final manifest = await _musicService.getYoutubeManifest(videoId);
-      if (manifest == null) throw Exception('Failed to get manifest');
-      
-      final streamInfo = manifest.audioOnly.withHighestBitrate();
+      // 3. Resolve a playable stream URL using the same fast-extractor ->
+      // yt-dlp -> youtube_explode_dart fallback chain already used for
+      // playback (getYoutubeManifest has no fallback and is what YouTube
+      // was blocking, which is why downloads were silently failing).
+      final streamUrl = await _musicService.getYoutubeStreamUrl(videoId);
+      if (streamUrl == null) throw Exception('Failed to resolve a stream URL');
 
       // 4. Prepare Directory
       Directory? dir;
@@ -111,9 +133,13 @@ class MusicDownloaderService {
       final file = File('${dir.path}/$cleanName.mp3');
       
       // 5. Download Stream
-      final stream = _musicService.yt.videos.streamsClient.get(streamInfo);
+      final request = http.Request('GET', Uri.parse(streamUrl));
+      final httpResponse = await http.Client().send(request);
+      if (httpResponse.statusCode != 200) {
+        throw Exception('Stream request failed with status ${httpResponse.statusCode}');
+      }
       final fileStream = file.openWrite();
-      await stream.pipe(fileStream);
+      await httpResponse.stream.pipe(fileStream);
       await fileStream.flush();
       await fileStream.close();
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -34,6 +35,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
 
   final ScrollController _lyricsScrollController = ScrollController();
   late AnimationController _glowController;
+  StreamSubscription<DownloadResultEvent>? _downloadResultSub;
 
   @override
   void initState() {
@@ -43,6 +45,17 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat(reverse: true);
+    _downloadResultSub = _downloader.onResult.listen((event) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(event.success
+            ? 'Downloaded: ${event.track.title}'
+            : 'Download failed: ${event.track.title}'),
+        backgroundColor: event.success ? const Color(0xFF1A1030) : Colors.red.shade900,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+    });
   }
 
   @override
@@ -50,6 +63,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
     WidgetsBinding.instance.removeObserver(this);
     _lyricsScrollController.dispose();
     _glowController.dispose();
+    _downloadResultSub?.cancel();
     super.dispose();
   }
 
