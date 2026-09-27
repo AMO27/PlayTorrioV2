@@ -102,6 +102,21 @@ class ReadComicsOnlineScraper {
     return comics;
   }
 
+  /// The site's own "Popular" ranking (`?order=popular`) — used as the
+  /// comics homepage's trending list.
+  static Future<List<Comic>> getTrendingComics({int page = 1}) async {
+    final res = await _get(Uri.parse('$baseUrl/manga/').replace(queryParameters: {
+      'page': '$page',
+      'order': 'popular',
+    }));
+    final comics = _parseCards(hp.parse(res.body));
+    if (comics.isEmpty && page == 1) {
+      throw ComicsUnavailableException(
+          '$host loaded but no trending comics could be read from it — its layout has probably changed.');
+    }
+    return comics;
+  }
+
   static Future<List<Comic>> searchComics(String query) async {
     try {
       final res = await _get(

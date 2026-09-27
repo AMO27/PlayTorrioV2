@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../services/xmltv_epg_service.dart';
 import '../screens/iptv_pt_player_screen.dart';
 import 'm3u_models.dart';
 import 'm3u_parser.dart';
@@ -451,7 +452,17 @@ class _M3uPlaylistsScreenState extends State<M3uPlaylistsScreen> {
           playlist: p,
           onTap: () {
             Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => M3uChannelsScreen(playlist: p),
+              builder: (_) => M3uChannelsScreen(
+                playlist: p,
+                onPlaylistUpdated: (updated) {
+                  setState(() {
+                    _playlists = [
+                      for (final x in _playlists) x.id == updated.id ? updated : x,
+                    ];
+                  });
+                  _persist();
+                },
+              ),
             ));
           },
           onRefresh: p.sourceUrl == null ? null : () => _refresh(p),
@@ -662,7 +673,10 @@ class _PrimaryBtn extends StatelessWidget {
 // ═════════════════════════════════════════════════════════════════════════════
 class M3uChannelsScreen extends StatefulWidget {
   final M3uPlaylist playlist;
-  const M3uChannelsScreen({super.key, required this.playlist});
+  /// Called after the user sets/changes/clears this playlist's EPG URL, so
+  /// the parent list screen can persist it back to storage.
+  final ValueChanged<M3uPlaylist>? onPlaylistUpdated;
+  const M3uChannelsScreen({super.key, required this.playlist, this.onPlaylistUpdated});
 
   @override
   State<M3uChannelsScreen> createState() => _M3uChannelsScreenState();
@@ -673,6 +687,9 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
   String? _group; // null = "All"
   final TextEditingController _searchCtrl = TextEditingController();
   final ScrollController _groupScrollCtrl = ScrollController();
+  late M3uPlaylist _playlist = widget.playlist;
+  bool _epgLoading = false;
+  bool _epgReady = false;
 
   /// Whether the group strip currently has room to scroll left / right.
   /// Used to show/hide the arrow buttons.
@@ -692,6 +709,131 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
     _groups = sorted;
     _groupScrollCtrl.addListener(_updateScrollArrows);
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateScrollArrows());
+    _loadEpgIfSet();
+  }
+
+  Future<void> _loadEpgIfSet() async {
+    final url = _playlist.epgUrl;
+    if (url == null || url.isEmpty) return;
+    setState(() => _epgLoading = true);
+    final ok = await XmltvEpgService.instance.load(url);
+    if (!mounted) return;
+    setState(() {
+      _epgLoading = false;
+      _epgReady = ok;
+    });
+  }
+
+  Future<void> _editEpgUrl() async {
+    final controller = TextEditingController(text: _playlist.epgUrl ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF14141C),
+        title: Text('TV Guide (XMLTV) URL', style: GoogleFonts.poppins(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+          decoration: InputDecoration(
+            hintText: 'https://provider.example.com/xmltv.php?...',
+            hintStyle: GoogleFonts.poppins(color: Colors.white38, fontSize: 12),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+            ),
+          ),
+        ),
+        actions: [
+          if ((_playlist.epgUrl ?? '').isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(''),
+              child: Text('Remove', style: GoogleFonts.poppins(color: Colors.redAccent)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.white60)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return; // cancelled
+    final updated = result.isEmpty
+        ? _playlist.copyWith(clearEpgUrl: true, updatedAt: DateTime.now().millisecondsSinceEpoch)
+        : _playlist.copyWith(epgUrl: result, updatedAt: DateTime.now().millisecondsSinceEpoch);
+    setState(() {
+      _playlist = updated;
+      _epgReady = false;
+    });
+    widget.onPlaylistUpdated?.call(updated);
+    if (result.isNotEmpty) _loadEpgIfSet();
+  }
+
+  void _showGuide(M3uChannel channel) {
+    final url = _playlist.epgUrl;
+    if (url == null || url.isEmpty) return;
+    final programmes = XmltvEpgService.instance
+        .programmesFor(url, tvgId: channel.tvgId, channelName: channel.tvgName.isNotEmpty ? channel.tvgName : channel.name);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14141C),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(channel.name, style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              if (programmes.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text('No guide data found for this channel.',
+                      style: GoogleFonts.poppins(color: Colors.white54, fontSize: 13)),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: programmes.length,
+                    itemBuilder: (_, i) {
+                      final p = programmes[i];
+                      final time = TimeOfDay.fromDateTime(p.start).format(context);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 64,
+                              child: Text(time,
+                                  style: GoogleFonts.poppins(
+                                      color: p.isNow ? const Color(0xFF00E5FF) : Colors.white54, fontSize: 12)),
+                            ),
+                            Expanded(
+                              child: Text(p.title,
+                                  style: GoogleFonts.poppins(
+                                      color: p.isNow ? Colors.white : Colors.white70,
+                                      fontSize: 13,
+                                      fontWeight: p.isNow ? FontWeight.w600 : FontWeight.w400)),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _updateScrollArrows() {
@@ -730,7 +872,7 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
 
   List<M3uChannel> get _filtered {
     final q = _query.trim().toLowerCase();
-    return widget.playlist.channels.where((c) {
+    return _playlist.channels.where((c) {
       if (_group != null && c.group != _group) return false;
       if (q.isEmpty) return true;
       return c.name.toLowerCase().contains(q) ||
@@ -743,10 +885,10 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => IptvPtPlayerScreen(
         sources: [
-          IptvPlaySource(url: ch.url, label: widget.playlist.name),
+          IptvPlaySource(url: ch.url, label: _playlist.name),
         ],
         title: ch.name,
-        subtitle: ch.group.isNotEmpty ? ch.group : widget.playlist.name,
+        subtitle: ch.group.isNotEmpty ? ch.group : _playlist.name,
         logoUrl: ch.logo.isEmpty ? null : ch.logo,
       ),
     ));
@@ -783,8 +925,24 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
                             horizontal: 12, vertical: 8),
                         itemCount: list.length,
                         separatorBuilder: (context, index) => const SizedBox(height: 6),
-                        itemBuilder: (_, i) =>
-                            _ChannelTile(channel: list[i], onTap: () => _play(list[i])),
+                        itemBuilder: (_, i) {
+                          final ch = list[i];
+                          String? nowPlaying;
+                          if (_epgReady && (_playlist.epgUrl ?? '').isNotEmpty) {
+                            final p = XmltvEpgService.instance.nowFor(
+                              _playlist.epgUrl!,
+                              tvgId: ch.tvgId,
+                              channelName: ch.tvgName.isNotEmpty ? ch.tvgName : ch.name,
+                            );
+                            nowPlaying = p?.title;
+                          }
+                          return _ChannelTile(
+                            channel: ch,
+                            onTap: () => _play(ch),
+                            nowPlaying: nowPlaying,
+                            onGuideTap: (_playlist.epgUrl ?? '').isNotEmpty ? () => _showGuide(ch) : null,
+                          );
+                        },
                       ),
               ),
             ],
@@ -815,7 +973,7 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  widget.playlist.name,
+                  _playlist.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.bebasNeue(
@@ -824,12 +982,28 @@ class _M3uChannelsScreenState extends State<M3uChannelsScreen> {
                       letterSpacing: 1.4),
                 ),
                 Text(
-                  '${widget.playlist.channels.length} channels',
+                  '${_playlist.channels.length} channels',
                   style: GoogleFonts.poppins(
                       color: Colors.white60, fontSize: 12),
                 ),
               ],
             ),
+          ),
+          if (_epgLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+              ),
+            ),
+          IconButton(
+            onPressed: _editEpgUrl,
+            icon: Icon(Icons.calendar_month_rounded,
+                color: (_playlist.epgUrl ?? '').isNotEmpty ? const Color(0xFF00E5FF) : Colors.white70,
+                size: 22),
+            tooltip: 'TV Guide (XMLTV) URL',
           ),
         ],
       ),
@@ -1038,7 +1212,16 @@ class _ScrollArrow extends StatelessWidget {
 class _ChannelTile extends StatelessWidget {
   final M3uChannel channel;
   final VoidCallback onTap;
-  const _ChannelTile({required this.channel, required this.onTap});
+  /// Current programme title, when a TV guide (XMLTV) is loaded for this
+  /// playlist and has a match for this channel. Null hides the "Now" line.
+  final String? nowPlaying;
+  final VoidCallback? onGuideTap;
+  const _ChannelTile({
+    required this.channel,
+    required this.onTap,
+    this.nowPlaying,
+    this.onGuideTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1081,9 +1264,26 @@ class _ChannelTile extends StatelessWidget {
                           style: GoogleFonts.poppins(
                               color: Colors.white54, fontSize: 11),
                         ),
+                      if (nowPlaying != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            'Now: $nowPlaying',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.poppins(
+                                color: const Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.w500),
+                          ),
+                        ),
                     ],
                   ),
                 ),
+                if (onGuideTap != null)
+                  IconButton(
+                    onPressed: onGuideTap,
+                    icon: const Icon(Icons.info_outline_rounded, color: Colors.white38, size: 20),
+                    tooltip: 'Guide',
+                  ),
                 const Icon(Icons.play_arrow_rounded,
                     color: Color(0xFF00E5FF)),
               ],

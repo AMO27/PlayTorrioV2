@@ -101,6 +101,11 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     });
   }
 
+  // The Apple Music chart is a fixed top-100 list (no server-side paging),
+  // so it's fetched once and paged through locally; only refetched when it
+  // fails or the cache runs dry.
+  List<MusicTrack>? _appleChartCache;
+
   Future<void> _loadTrendingTracks() async {
     if (!mounted) return;
     setState(() {
@@ -110,9 +115,21 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     List<MusicTrack> tracks = _trendingTracks;
     var failed = false;
     try {
-      tracks = await _musicService.getTrendingTracks(index: _currentMusicOffset, limit: _musicLimit);
+      _appleChartCache ??= await _musicService.getAppleMusicTrending(limit: 100);
+      final chart = _appleChartCache!;
+      if (_currentMusicOffset >= chart.length) {
+        tracks = const [];
+      } else {
+        tracks = chart.sublist(
+            _currentMusicOffset, (_currentMusicOffset + _musicLimit).clamp(0, chart.length));
+      }
     } catch (_) {
-      failed = true; // network down / blocked / Deezer error after retries
+      // Apple's feed is down/unreachable — fall back to the Deezer chart.
+      try {
+        tracks = await _musicService.getTrendingTracks(index: _currentMusicOffset, limit: _musicLimit);
+      } catch (_) {
+        failed = true; // network down / blocked / both sources failed after retries
+      }
     }
     if (!mounted) return;
     setState(() {

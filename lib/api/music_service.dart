@@ -195,6 +195,27 @@ class MusicService {
     return items.map((item) => MusicTrack.fromJson(item)).toList();
   }, <MusicTrack>[], rethrowOnFailure: true);
 
+  /// Apple Music's public "Most Played" chart (a free, official, no-key-needed
+  /// RSS/JSON feed) used as the homepage trending list. Falls back to the
+  /// Deezer chart (getTrendingTracks) if the feed can't be read.
+  Future<List<MusicTrack>> getAppleMusicTrending({int limit = 25}) => _withRetry(() async {
+    final data = await _getJson(Uri.parse(
+        'https://rss.applemarketingtools.com/api/v2/us/music/most-played/$limit/songs.json'));
+    final items = (data['feed']?['results'] as List?) ?? const [];
+    return items.map((item) {
+      final artwork = (item['artworkUrl100'] as String? ?? '')
+          .replaceAll('100x100bb.jpg', '400x400bb.jpg');
+      return MusicTrack(
+        id: 'am_${item['id']}',
+        title: (item['name'] ?? 'Unknown Title').toString(),
+        artist: (item['artistName'] ?? 'Unknown Artist').toString(),
+        album: (item['collectionName'] ?? item['name'] ?? '').toString(),
+        cover: artwork,
+        duration: 0,
+      );
+    }).toList();
+  }, <MusicTrack>[], rethrowOnFailure: true);
+
   Future<List<MusicAlbum>> searchAlbums(String query) => _withRetry(() async {
     final data = await _getJson(Uri.https('api.deezer.com', '/search/album', {'q': query}));
     final albums = (data['data'] as List?) ?? const [];

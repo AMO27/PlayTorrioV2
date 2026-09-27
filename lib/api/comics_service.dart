@@ -121,6 +121,13 @@ class ComicsService {
     }
   }
 
+  /// The comics homepage's trending list (readcomiconline.xyz's own
+  /// "Popular" ordering — there is no cross-site "comics chart" the way
+  /// Apple Music publishes one for songs).
+  Future<List<Comic>> getTrendingComics({int page = 1}) async {
+    return ReadComicsOnlineScraper.getTrendingComics(page: page);
+  }
+
   Future<List<Comic>> _getComicsRco({int page = 1}) async {
     final url = '$_baseUrl/ComicList?page=$page';
     final http.Response response;

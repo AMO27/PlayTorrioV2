@@ -46,6 +46,10 @@ class M3uPlaylist {
   final int addedAt;
   final int updatedAt;
   final List<M3uChannel> channels;
+  /// Optional XMLTV guide URL — many IPTV providers publish one alongside
+  /// the playlist (e.g. `.../xmltv.php?...`). Set from the channels screen;
+  /// null/empty means "no TV guide for this playlist".
+  final String? epgUrl;
 
   const M3uPlaylist({
     required this.id,
@@ -54,12 +58,15 @@ class M3uPlaylist {
     required this.addedAt,
     required this.updatedAt,
     required this.channels,
+    this.epgUrl,
   });
 
   M3uPlaylist copyWith({
     String? name,
     int? updatedAt,
     List<M3uChannel>? channels,
+    String? epgUrl,
+    bool clearEpgUrl = false,
   }) =>
       M3uPlaylist(
         id: id,
@@ -68,6 +75,7 @@ class M3uPlaylist {
         addedAt: addedAt,
         updatedAt: updatedAt ?? this.updatedAt,
         channels: channels ?? this.channels,
+        epgUrl: clearEpgUrl ? null : (epgUrl ?? this.epgUrl),
       );
 
   Map<String, dynamic> toJson() => {
@@ -77,6 +85,7 @@ class M3uPlaylist {
         'addedAt': addedAt,
         'updatedAt': updatedAt,
         'channels': channels.map((c) => c.toJson()).toList(),
+        if (epgUrl != null && epgUrl!.isNotEmpty) 'epgUrl': epgUrl,
       };
 
   factory M3uPlaylist.fromJson(Map<String, dynamic> j) => M3uPlaylist(
@@ -88,5 +97,6 @@ class M3uPlaylist {
         channels: (j['channels'] as List? ?? const [])
             .map((e) => M3uChannel.fromJson(e as Map<String, dynamic>))
             .toList(),
+        epgUrl: j['epgUrl'] as String?,
       );
 }

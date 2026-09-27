@@ -300,6 +300,10 @@ class MusicPlayerService {
       
       if (onlineLyrics != null) {
         lyrics.value = onlineLyrics;
+        // Cache to disk so a repeat play (or a later offline play) doesn't
+        // need to hit lrclib.net again — previously only downloaded tracks
+        // got this.
+        unawaited(_lyricsService.saveLyrics(track, onlineLyrics));
       } else {
         lyrics.value = []; // Explicitly mark as not found
       }

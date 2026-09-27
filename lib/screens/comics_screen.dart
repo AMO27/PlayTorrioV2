@@ -28,6 +28,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
   String? _errorMessage;
   int _currentPage = 1;
   bool _isShowingLiked = false;
+  bool _isShowingTrending = true; // Trending (site's Popular ranking) is the comics homepage default.
   String _currentSearchQuery = '';
 
   static const String _historyKey = 'comic_reading_history';
@@ -42,7 +43,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
       _searchController.text = _currentSearchQuery;
       _searchComics(_currentSearchQuery);
     } else {
-      _fetchComics();
+      _fetchComics(trending: true);
     }
   }
 
@@ -97,16 +98,19 @@ class _ComicsScreenState extends State<ComicsScreen> {
     }
   }
 
-  Future<void> _fetchComics() async {
+  Future<void> _fetchComics({bool trending = false}) async {
     setState(() {
       _isLoading = true;
       _isShowingLiked = false;
+      _isShowingTrending = trending;
       _errorMessage = null;
     });
     List<Comic> comics = [];
     String? error;
     try {
-      comics = await _comicsService.getComics(page: _currentPage);
+      comics = trending
+          ? await _comicsService.getTrendingComics(page: _currentPage)
+          : await _comicsService.getComics(page: _currentPage);
     } on ComicsUnavailableException catch (e) {
       error = e.message;
     } catch (e) {
@@ -121,10 +125,17 @@ class _ComicsScreenState extends State<ComicsScreen> {
     _scrollToTop();
   }
 
+  void _toggleTrending() {
+    _currentPage = 1;
+    _searchController.clear();
+    _currentSearchQuery = '';
+    _fetchComics(trending: !_isShowingTrending);
+  }
+
   Future<void> _searchComics(String query) async {
     if (query.isEmpty) {
       _currentPage = 1;
-      _fetchComics();
+      _fetchComics(trending: _isShowingTrending);
       return;
     }
     setState(() {
@@ -161,13 +172,13 @@ class _ComicsScreenState extends State<ComicsScreen> {
 
   void _nextPage() {
     setState(() => _currentPage++);
-    _fetchComics();
+    _fetchComics(trending: _isShowingTrending);
   }
 
   void _prevPage() {
     if (_currentPage > 1) {
       setState(() => _currentPage--);
-      _fetchComics();
+      _fetchComics(trending: _isShowingTrending);
     }
   }
 
@@ -189,7 +200,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
                   } else if (_currentSearchQuery.isNotEmpty) {
                     await _searchComics(_currentSearchQuery);
                   } else {
-                    await _fetchComics();
+                    await _fetchComics(trending: _isShowingTrending);
                   }
                 },
                 color: AppTheme.primaryColor,
@@ -222,20 +233,33 @@ class _ComicsScreenState extends State<ComicsScreen> {
             'Comics',
             style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, fontFamily: 'Poppins'),
           ),
-          IconButton(
-            icon: Icon(
-              _isShowingLiked ? Icons.favorite : Icons.favorite_border,
-              color: _isShowingLiked ? Colors.redAccent : Colors.white,
-              size: 28,
-            ),
-            onPressed: () {
-              if (_isShowingLiked) {
-                _fetchComics();
-              } else {
-                _fetchLikedComics();
-              }
-            },
-            tooltip: _isShowingLiked ? 'Show All' : 'Show Liked',
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  Icons.local_fire_department,
+                  color: _isShowingTrending ? Colors.orangeAccent : Colors.white,
+                  size: 28,
+                ),
+                onPressed: _toggleTrending,
+                tooltip: _isShowingTrending ? 'Show All' : 'Trending',
+              ),
+              IconButton(
+                icon: Icon(
+                  _isShowingLiked ? Icons.favorite : Icons.favorite_border,
+                  color: _isShowingLiked ? Colors.redAccent : Colors.white,
+                  size: 28,
+                ),
+                onPressed: () {
+                  if (_isShowingLiked) {
+                    _fetchComics(trending: _isShowingTrending);
+                  } else {
+                    _fetchLikedComics();
+                  }
+                },
+                tooltip: _isShowingLiked ? 'Show All' : 'Show Liked',
+              ),
+            ],
           ),
         ],
       ),
@@ -262,7 +286,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
                     _searchController.clear();
                     _currentSearchQuery = '';
                     _currentPage = 1;
-                    _fetchComics();
+                    _fetchComics(trending: _isShowingTrending);
                   },
                 )
               : null,
