@@ -25,8 +25,15 @@ class _ComicDetailsScreenState extends State<ComicDetailsScreen> {
     _checkLikeStatus();
   }
 
+  String? _loadError;
+
   Future<void> _loadDetails() async {
-    final details = await _comicsService.getComicDetails(widget.comic);
+    ComicDetails? details;
+    try {
+      details = await _comicsService.getComicDetails(widget.comic);
+    } catch (e) {
+      _loadError = e is ComicsUnavailableException ? e.message : e.toString();
+    }
     if (mounted) {
       setState(() {
         _details = details;
@@ -52,7 +59,16 @@ class _ComicDetailsScreenState extends State<ComicDetailsScreen> {
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor))
         : _details == null
-          ? const Center(child: Text('Failed to load details', style: TextStyle(color: Colors.white)))
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  _loadError == null ? 'Failed to load details' : 'Failed to load details\n\n$_loadError',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            )
           : CustomScrollView(
               slivers: [
                 _buildAppBar(),

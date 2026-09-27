@@ -168,7 +168,9 @@ class ReadComicsOnlineScraper {
       );
     } catch (e) {
       debugPrint('[ReadComicsOnline] detail error: $e');
-      return null;
+      if (e is ComicsUnavailableException) rethrow;
+      throw ComicsUnavailableException(
+          'Could not read this comic page (${e.runtimeType}: $e).');
     }
   }
 
