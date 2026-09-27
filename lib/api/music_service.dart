@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -265,6 +267,38 @@ class MusicService {
   }
 
   /// Fast stream URL fetching for playback — uses shared instance for cookie persistence
+  Future<String?> _ytDlpStreamUrl(String videoId) async {
+    if (!Platform.isWindows) return null;
+    try {
+      final exe = File(
+          '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}yt-dlp.exe');
+      if (!await exe.exists()) {
+        debugPrint('MusicService: yt-dlp.exe not found at ${exe.path}');
+        return null;
+      }
+      final res = await Process.run(exe.path, [
+        '-f', 'bestaudio/best',
+        '--no-playlist',
+        '--no-warnings',
+        '-g',
+        'https://www.youtube.com/watch?v=$videoId',
+      ]).timeout(const Duration(seconds: 40));
+      if (res.exitCode != 0) {
+        debugPrint('MusicService: yt-dlp failed: ${res.stderr}');
+        return null;
+      }
+      final line = res.stdout
+          .toString()
+          .split('\n')
+          .map((l) => l.trim())
+          .firstWhere((l) => l.startsWith('http'), orElse: () => '');
+      return line.isEmpty ? null : line;
+    } catch (e) {
+      debugPrint('MusicService: yt-dlp error: $e');
+      return null;
+    }
+  }
+
   void forgetStreamUrl(String videoId) => _streamUrlCache.remove(videoId);
 
   Future<String?> getYoutubeStreamUrl(String videoId, {bool skipFastPath = false}) async {
@@ -285,6 +319,15 @@ class MusicService {
       }
     } catch (e) {
       debugPrint('MusicService: Fast extractor failed: $e');
+    }
+
+    // Second choice: yt-dlp (shipped next to the exe), which is updated
+    // quickly whenever YouTube changes how it hands out streams.
+    final dlpUrl = await _ytDlpStreamUrl(videoId);
+    if (dlpUrl != null) {
+      _streamUrlCache[videoId] = _CachedUrl(dlpUrl);
+      debugPrint('MusicService: Got stream URL via yt-dlp');
+      return dlpUrl;
     }
 
     // Fallback: youtube_explode_dart.

@@ -39,6 +39,11 @@ jobs:
           }
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - run: flutter build windows --release
+      # yt-dlp is used by the music player to resolve YouTube audio streams.
+      - name: Bundle yt-dlp
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "build/windows/x64/runner/Release/yt-dlp.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: PlayTorrio-windows
