@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +6,35 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import '../utils/app_theme.dart';
+
+// ─── Providers ───────────────────────────────────────────────────────────────
+//
+// The old sources (PPV.to, dami-tv.pro, cdn-live.tv) are gone: the first two
+// were seized in "Operation Offsides" and cdn-live.tv no longer resolves.
+// These are the replacements. All three hand back embeddable player pages,
+// which we load in a WebView like before.
+
+enum _DataProvider { damiTv, sportsBite, ntvStream }
+
+extension on _DataProvider {
+  String get label => switch (this) {
+        _DataProvider.damiTv => 'Dami TV',
+        _DataProvider.sportsBite => 'SportsBite',
+        _DataProvider.ntvStream => 'NTV Stream',
+      };
+
+  String get chipLabel => switch (this) {
+        _DataProvider.damiTv => '📺 Dami TV',
+        _DataProvider.sportsBite => '⚡ SportsBite',
+        _DataProvider.ntvStream => '🎬 NTV Stream',
+      };
+
+  Color get color => switch (this) {
+        _DataProvider.damiTv => Colors.blue,
+        _DataProvider.sportsBite => Colors.orange,
+        _DataProvider.ntvStream => Colors.teal,
+      };
+}
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
@@ -14,281 +44,402 @@ class _Sport {
   const _Sport({required this.id, required this.name});
 }
 
-class _PpvStream {
-  final int id;
-  final String name;
-  final String tag;
-  final String? poster;
-  final String uriName;
-  final int startsAt;
-  final int endsAt;
-  final bool alwaysLive;
-  final String category;
-  final String? iframe;
-  final bool allowPastStreams;
-
-  const _PpvStream({
-    required this.id,
-    required this.name,
-    required this.tag,
-    this.poster,
-    required this.uriName,
-    required this.startsAt,
-    required this.endsAt,
-    required this.alwaysLive,
-    required this.category,
-    this.iframe,
-    required this.allowPastStreams,
-  });
-
-  factory _PpvStream.fromJson(Map<String, dynamic> j) => _PpvStream(
-        id:              (j['id'] as num?)?.toInt() ?? 0,
-        name:            (j['name'] ?? '').toString(),
-        tag:             (j['tag'] ?? '').toString(),
-        poster:          j['poster'] as String?,
-        uriName:         (j['uri_name'] ?? '').toString(),
-        startsAt:        (j['starts_at'] as num?)?.toInt() ?? 0,
-        endsAt:          (j['ends_at'] as num?)?.toInt() ?? 0,
-        alwaysLive:      (j['always_live'] as num?)?.toInt() == 1,
-        category:        (j['category_name'] ?? '').toString(),
-        iframe:          j['iframe'] as String?,
-        allowPastStreams: (j['allowpaststreams'] as num?)?.toInt() == 1,
-      );
-
-  String get timeLabel {
-    if (alwaysLive) return '🔴 Always Live';
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (now >= startsAt && now <= endsAt) return '🔴 Live Now';
-    if (startsAt > now) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(startsAt * 1000);
-      return '⏰ ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
-    }
-    return '';
-  }
-}
-
-class _CdnChannel {
-  final String name;
-  final String code;
+/// One playable server/mirror for an event.
+class _StreamOption {
+  final String label;
   final String url;
-  final String image;
-  final String status;
-  final int viewers;
-
-  const _CdnChannel({
-    required this.name,
-    required this.code,
-    required this.url,
-    required this.image,
-    required this.status,
-    required this.viewers,
-  });
-
-  factory _CdnChannel.fromJson(Map<String, dynamic> j) => _CdnChannel(
-        name:    (j['name'] ?? '').toString(),
-        code:    (j['code'] ?? '').toString(),
-        url:     (j['url'] ?? '').toString(),
-        image:   (j['image'] ?? '').toString(),
-        status:  (j['status'] ?? 'offline').toString(),
-        viewers: (j['viewers'] as num?)?.toInt() ?? 0,
-      );
+  const _StreamOption({required this.label, required this.url});
 }
 
-class _CdnSportEvent {
-  final String gameID;
-  final String homeTeam;
-  final String awayTeam;
-  final String homeTeamIMG;
-  final String awayTeamIMG;
-  final String time;
-  final String tournament;
-  final String country;
-  final String countryIMG;
-  final String status;
-  final String start;
-  final String end;
-  final List<_CdnChannel> channels;
-
-  const _CdnSportEvent({
-    required this.gameID,
-    required this.homeTeam,
-    required this.awayTeam,
-    required this.homeTeamIMG,
-    required this.awayTeamIMG,
-    required this.time,
-    required this.tournament,
-    required this.country,
-    required this.countryIMG,
-    required this.status,
-    required this.start,
-    required this.end,
-    required this.channels,
-  });
-
-  factory _CdnSportEvent.fromJson(Map<String, dynamic> j) => _CdnSportEvent(
-        gameID:      (j['gameID'] ?? '').toString(),
-        homeTeam:    (j['homeTeam'] ?? '').toString(),
-        awayTeam:    (j['awayTeam'] ?? '').toString(),
-        homeTeamIMG: (j['homeTeamIMG'] ?? '').toString(),
-        awayTeamIMG: (j['awayTeamIMG'] ?? '').toString(),
-        time:        (j['time'] ?? '').toString(),
-        tournament:  (j['tournament'] ?? '').toString(),
-        country:     (j['country'] ?? '').toString(),
-        countryIMG:  (j['countryIMG'] ?? '').toString(),
-        status:      (j['status'] ?? '').toString(),
-        start:       (j['start'] ?? '').toString(),
-        end:         (j['end'] ?? '').toString(),
-        channels:    (j['channels'] as List? ?? [])
-            .map((c) => _CdnChannel.fromJson(c as Map<String, dynamic>))
-            .toList(),
-      );
-}
-
-class _DamiTvStream {
+/// Provider-agnostic event shown in the grid.
+class _LiveEvent {
   final String id;
-  final String name;
-  final String poster;
-  final int startsAt;
-  final int endsAt;
-  final String categoryName;
-  final String status;
+  final String title;
+  final String category; // pretty sport/category name, used for tabs
   final String league;
+  final String? poster;
   final String? homeTeam;
   final String? homeBadge;
   final String? awayTeam;
   final String? awayBadge;
+  final bool isLive;
+  final bool alwaysOn; // 24/7 channel rather than a scheduled match
+  final DateTime? start;
   final int viewers;
-  final String iframe;
+  final List<_StreamOption> sources;
 
-  const _DamiTvStream({
+  const _LiveEvent({
     required this.id,
-    required this.name,
-    required this.poster,
-    required this.startsAt,
-    required this.endsAt,
-    required this.categoryName,
-    required this.status,
-    required this.league,
+    required this.title,
+    required this.category,
+    this.league = '',
+    this.poster,
     this.homeTeam,
     this.homeBadge,
     this.awayTeam,
     this.awayBadge,
-    required this.viewers,
-    required this.iframe,
+    this.isLive = false,
+    this.alwaysOn = false,
+    this.start,
+    this.viewers = 0,
+    required this.sources,
   });
 
-  factory _DamiTvStream.fromJson(Map<String, dynamic> j) {
-    final teams = j['teams'] as Map<String, dynamic>?;
-    final home = teams?['home'] as Map<String, dynamic>?;
-    final away = teams?['away'] as Map<String, dynamic>?;
-    
-    String p = (j['poster'] ?? '').toString();
-    if (p.startsWith('/')) p = 'https://dami-tv.pro$p';
-
-    String hb = (home?['badge'] ?? '').toString();
-    if (hb.startsWith('/')) hb = 'https://dami-tv.pro$hb';
-
-    String ab = (away?['badge'] ?? '').toString();
-    if (ab.startsWith('/')) ab = 'https://dami-tv.pro$ab';
-    
-    return _DamiTvStream(
-      id: (j['id'] ?? '').toString(),
-      name: (j['name'] ?? '').toString(),
-      poster: p,
-      startsAt: (j['starts_at'] as num?)?.toInt() ?? 0,
-      endsAt: (j['ends_at'] as num?)?.toInt() ?? 0,
-      categoryName: (j['category_name'] ?? '').toString(),
-      status: (j['status'] ?? '').toString(),
-      league: (j['league'] ?? '').toString(),
-      homeTeam: home?['name'] as String?,
-      homeBadge: hb,
-      awayTeam: away?['name'] as String?,
-      awayBadge: ab,
-      viewers: (j['viewers'] as num?)?.toInt() ?? 0,
-      iframe: (j['iframe'] ?? '').toString(),
-    );
-  }
+  bool get hasTeams =>
+      (homeTeam?.isNotEmpty ?? false) && (awayTeam?.isNotEmpty ?? false);
 
   String get timeLabel {
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (now >= startsAt && now <= endsAt) return '🔴 Live Now';
-    if (startsAt > now) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(startsAt * 1000);
-      return '⏰ ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
-    }
-    return '';
+    if (alwaysOn) return '🔴 24/7';
+    if (isLive) return '🔴 Live Now';
+    final s = start;
+    if (s == null) return '';
+    final local = s.toLocal();
+    final now = DateTime.now();
+    final hm =
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    if (local.isBefore(now)) return '';
+    final sameDay = local.year == now.year &&
+        local.month == now.month &&
+        local.day == now.day;
+    if (sameDay) return '⏰ $hm';
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return '⏰ ${days[local.weekday - 1]} $hm';
   }
 }
 
-// ─── API helpers ──────────────────────────────────────────────────────────────
+// ─── Parsing helpers ─────────────────────────────────────────────────────────
 
-const _ua = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'};
+String _str(dynamic v) => v == null ? '' : v.toString();
 
-Future<List<_DamiTvStream>> _fetchDamiTvStreams() async {
+String? _absUrl(dynamic v, String origin) {
+  final s = _str(v).trim();
+  if (s.isEmpty) return null;
+  if (s.startsWith('//')) return 'https:$s';
+  if (s.startsWith('/')) return '$origin$s';
+  return s;
+}
+
+/// "american-football" -> "American Football"
+String _prettyCategory(String raw) {
+  final s = raw.trim();
+  if (s.isEmpty) return 'Other';
+  return s
+      .split(RegExp(r'[-_\s]+'))
+      .where((w) => w.isNotEmpty)
+      .map((w) => w[0].toUpperCase() + w.substring(1))
+      .join(' ');
+}
+
+DateTime? _fromMs(dynamic v) {
+  if (v is num && v > 0) {
+    return DateTime.fromMillisecondsSinceEpoch(v.toInt(), isUtc: true);
+  }
+  return null;
+}
+
+String? _teamName(dynamic teams, String side) {
+  if (teams is! Map) return null;
+  final t = teams[side];
+  if (t is! Map) return null;
+  final n = _str(t['name']).trim();
+  return n.isEmpty ? null : n;
+}
+
+String? _teamBadge(dynamic teams, String side, String origin) {
+  if (teams is! Map) return null;
+  final t = teams[side];
+  if (t is! Map) return null;
+  return _absUrl(t['badge'], origin);
+}
+
+/// Live first, then upcoming by start time, then everything else.
+void _sortEvents(List<_LiveEvent> events) {
+  int rank(_LiveEvent e) => e.isLive && !e.alwaysOn ? 0 : (e.alwaysOn ? 2 : 1);
+  events.sort((a, b) {
+    final r = rank(a).compareTo(rank(b));
+    if (r != 0) return r;
+    final sa = a.start, sb = b.start;
+    if (sa != null && sb != null) return sa.compareTo(sb);
+    if (sa != null) return -1;
+    if (sb != null) return 1;
+    return a.title.compareTo(b.title);
+  });
+}
+
+// ─── API ─────────────────────────────────────────────────────────────────────
+
+const _userAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+Future<dynamic> _getJson(String url, {required String origin}) async {
+  final host = Uri.parse(url).host;
+  String problem = '$host: unknown error';
   try {
-    final resp = await http.get(Uri.parse('https://dami-tv.pro/papi/api/streams'), headers: _ua)
-        .timeout(const Duration(seconds: 12));
-    if (resp.statusCode != 200) return [];
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (body['success'] != true) return [];
-    
-    final result = <_DamiTvStream>[];
-    final categories = body['streams'] as List? ?? [];
-    for (final cat in categories) {
-      final streams = cat['streams'] as List? ?? [];
-      for (final s in streams) {
-        try { result.add(_DamiTvStream.fromJson(s as Map<String, dynamic>)); } catch (_) {}
+    final resp = await http.get(Uri.parse(url), headers: {
+      'User-Agent': _userAgent,
+      'Accept': 'application/json, text/plain, */*',
+      'Referer': '$origin/',
+      'Origin': origin,
+    }).timeout(const Duration(seconds: 15));
+    if (resp.statusCode == 200) {
+      try {
+        return jsonDecode(resp.body);
+      } catch (_) {
+        problem = '$host did not return match data (possibly blocked)';
+      }
+    } else {
+      problem = '$host returned HTTP ${resp.statusCode}';
+    }
+  } catch (e) {
+    problem = '$host: $e';
+  }
+
+  // These sites sit behind Cloudflare. If the plain request got a bot
+  // challenge instead of JSON, load it in a hidden browser, which can pass
+  // the challenge, and read the JSON out of the page.
+  final viaBrowser = await _getJsonViaWebView(url);
+  if (viaBrowser != null) return viaBrowser;
+  throw Exception(problem);
+}
+
+Future<dynamic> _getJsonViaWebView(String url) async {
+  final completer = Completer<String>();
+  HeadlessInAppWebView? view;
+  try {
+    view = HeadlessInAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri(url)),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        userAgent: _userAgent,
+      ),
+      onLoadStop: (ctrl, _) async {
+        // Challenge pages reload themselves, so poll until the body is JSON.
+        for (var i = 0; i < 20 && !completer.isCompleted; i++) {
+          final body = await ctrl.evaluateJavascript(
+              source: 'document.body ? document.body.innerText : ""');
+          final text = body?.toString() ?? '';
+          final t = text.trimLeft();
+          if (t.startsWith('{') || t.startsWith('[')) {
+            if (!completer.isCompleted) completer.complete(text);
+            return;
+          }
+          await Future.delayed(const Duration(milliseconds: 750));
+        }
+      },
+    );
+    await view.run();
+    final text = await completer.future.timeout(const Duration(seconds: 25));
+    return jsonDecode(text);
+  } catch (_) {
+    return null;
+  } finally {
+    try {
+      await view?.dispose();
+    } catch (_) {}
+  }
+}
+
+// damitv.st — GET /papi/matches/live returns a flat list:
+// { id, league, title, category, date(ms), poster, teams{home,away{name,badge}},
+//   status, viewers, embedUrl, substreams[] }
+Future<List<_LiveEvent>> _fetchDamiTv() async {
+  const origin = 'https://damitv.st';
+  final data = await _getJson('$origin/papi/matches/live', origin: origin);
+  final list = data is List
+      ? data
+      : (data is Map ? (data['matches'] ?? data['data'] ?? []) : []) as List;
+
+  final out = <_LiveEvent>[];
+  for (final raw in list) {
+    if (raw is! Map) continue;
+    final sources = <_StreamOption>[];
+    final main = _absUrl(raw['embedUrl'], origin);
+    if (main != null) sources.add(_StreamOption(label: 'Main', url: main));
+
+    // substreams: alternate mirrors; shape isn't guaranteed, so be lenient.
+    final subs = raw['substreams'];
+    if (subs is List) {
+      var n = 2;
+      for (final s in subs) {
+        String? url;
+        String label = 'Server $n';
+        if (s is String) {
+          url = _absUrl(s, origin);
+        } else if (s is Map) {
+          url = _absUrl(s['embedUrl'] ?? s['url'] ?? s['iframe'], origin);
+          final l = _str(s['label'] ?? s['name'] ?? s['title']).trim();
+          if (l.isNotEmpty) label = l;
+        }
+        final u = url;
+        if (u != null && !sources.any((o) => o.url == u)) {
+          sources.add(_StreamOption(label: label, url: u));
+          n++;
+        }
       }
     }
-    return result;
-  } catch (_) {
-    return [];
+
+    final id = _str(raw['id']);
+    final status = _str(raw['status']).toLowerCase();
+    out.add(_LiveEvent(
+      id: id,
+      title: _str(raw['title']).isNotEmpty ? _str(raw['title']) : id,
+      category: _prettyCategory(_str(raw['category'])),
+      league: _str(raw['league']),
+      poster: _absUrl(raw['poster'], origin),
+      homeTeam: _teamName(raw['teams'], 'home'),
+      homeBadge: _teamBadge(raw['teams'], 'home', origin),
+      awayTeam: _teamName(raw['teams'], 'away'),
+      awayBadge: _teamBadge(raw['teams'], 'away', origin),
+      isLive: status == 'live',
+      alwaysOn: id.startsWith('247-'),
+      start: _fromMs(raw['date']),
+      viewers: raw['viewers'] is num ? (raw['viewers'] as num).toInt() : 0,
+      sources: sources,
+    ));
   }
+  _sortEvents(out);
+  return out;
 }
 
-Future<List<_PpvStream>> _fetchPpvStreams() async {
-  final resp = await http.get(Uri.parse('https://old.ppv.to/api/streams'), headers: _ua)
-      .timeout(const Duration(seconds: 12));
-  if (resp.statusCode != 200) return [];
-  final body = jsonDecode(resp.body) as Map<String, dynamic>;
-  final categories = (body['streams'] as List? ?? []);
-  final result = <_PpvStream>[];
-  for (final cat in categories) {
-    final streams = (cat['streams'] as List? ?? []);
-    for (final s in streams) {
-      try { result.add(_PpvStream.fromJson(s as Map<String, dynamic>)); } catch (_) {}
+// sportsbite.org — GET /api/forestgump/matches returns
+// { days: [ { date, events: [ { title, slug, start(ISO), category, sport,
+//   teams{home,away{name}}, poster, live, streams:[{label, manifest_url,
+//   format:"iframe", status, quality}] } ] } ], ... }
+Future<List<_LiveEvent>> _fetchSportsBite() async {
+  const origin = 'https://sportsbite.org';
+  final data =
+      await _getJson('$origin/api/forestgump/matches', origin: origin);
+  final days = data is Map ? data['days'] : null;
+  if (days is! List) return [];
+
+  final seen = <String>{};
+  final out = <_LiveEvent>[];
+  for (final day in days) {
+    if (day is! Map) continue;
+    final events = day['events'];
+    if (events is! List) continue;
+    for (final raw in events) {
+      if (raw is! Map) continue;
+      final id = _str(raw['slug']).isNotEmpty
+          ? _str(raw['slug'])
+          : _str(raw['streamed_event_id']);
+      if (id.isEmpty || !seen.add(id)) continue;
+
+      final sources = <_StreamOption>[];
+      final streams = raw['streams'];
+      if (streams is List) {
+        for (final s in streams) {
+          if (s is! Map) continue;
+          final format = _str(s['format']).toLowerCase();
+          final hints = s['playback_hints'];
+          final player = hints is Map ? _str(hints['player']).toLowerCase() : '';
+          // Only page/iframe embeds can be shown in the WebView.
+          if (format.isNotEmpty && format != 'iframe' && player != 'iframe') {
+            continue;
+          }
+          if (_str(s['status']).toLowerCase() == 'offline') continue;
+          final url = _absUrl(s['manifest_url'] ?? s['url'], origin);
+          if (url == null || sources.any((o) => o.url == url)) continue;
+          var label = _str(s['label'] ?? s['name']).trim();
+          if (label.isEmpty) label = 'Server ${sources.length + 1}';
+          final quality = _str(s['quality']).trim();
+          final lang = _str(s['language']).trim();
+          final extra = [quality, lang].where((x) => x.isNotEmpty).join(' · ');
+          sources.add(_StreamOption(
+              label: extra.isEmpty ? label : '$label  ($extra)', url: url));
+        }
+      }
+
+      final start = DateTime.tryParse(_str(raw['start']));
+      // Always-on channels come back with a 1970 epoch start time.
+      final alwaysOn = start != null && start.year < 2000;
+      final cat = _str(raw['sport']).isNotEmpty
+          ? _str(raw['sport'])
+          : _str(raw['category']);
+
+      out.add(_LiveEvent(
+        id: id,
+        title: _str(raw['title']).isNotEmpty ? _str(raw['title']) : id,
+        category: _prettyCategory(cat),
+        poster: _absUrl(raw['poster'], origin),
+        homeTeam: _teamName(raw['teams'], 'home'),
+        awayTeam: _teamName(raw['teams'], 'away'),
+        isLive: raw['live'] == true,
+        alwaysOn: alwaysOn,
+        start: alwaysOn ? null : start,
+        sources: sources,
+      ));
     }
   }
-  return result;
+  _sortEvents(out);
+  return out;
 }
 
-Future<List<_CdnChannel>> _fetchCdnChannels() async {
-  final resp = await http.get(Uri.parse('https://api.cdn-live.tv/api/v1/channels/?user=cdnlivetv&plan=free'), headers: _ua)
-      .timeout(const Duration(seconds: 12));
-  if (resp.statusCode != 200) return [];
-  final body = jsonDecode(resp.body) as Map<String, dynamic>;
-  return ((body['channels'] as List?) ?? [])
-      .map((c) => _CdnChannel.fromJson(c as Map<String, dynamic>))
-      .toList();
-}
+// ntv.cx (NTV Stream) — GET /api/get-matches returns
+// { success, all: [ { id, title, category, date(ms), poster, teams,
+//   sources:[{source, id}], live } ] }
+// The event has no embed URL; the site's own player page is
+// /watch/<server>/<sources[].id>, where <server> is one of its mirrors.
+const _ntvServers = ['kobra', 'falcon', 'raptor', 'phoenix', 'titan'];
 
-Future<List<_CdnSportEvent>> _fetchCdnSports() async {
-  final resp = await http.get(Uri.parse('https://api.cdn-live.tv/api/v1/events/sports/?user=cdnlivetv&plan=free'), headers: _ua)
-      .timeout(const Duration(seconds: 12));
-  if (resp.statusCode != 200) return [];
-  final body = jsonDecode(resp.body) as Map<String, dynamic>;
-  final cdnData = body['cdn-live-tv'] as Map<String, dynamic>?;
-  if (cdnData == null) return [];
-  
-  final result = <_CdnSportEvent>[];
-  for (final key in ['Soccer', 'NFL', 'NBA', 'NHL']) {
-    final events = (cdnData[key] as List?) ?? [];
-    for (final e in events) {
-      try { result.add(_CdnSportEvent.fromJson(e as Map<String, dynamic>)); } catch (_) {}
+Future<List<_LiveEvent>> _fetchNtvStream() async {
+  const origin = 'https://ntv.cx';
+  final data = await _getJson('$origin/api/get-matches', origin: origin);
+  final list = data is Map ? (data['all'] ?? data['matches']) : data;
+  if (list is! List) return [];
+
+  final out = <_LiveEvent>[];
+  for (final raw in list) {
+    if (raw is! Map) continue;
+    final id = _str(raw['id']);
+
+    final streamIds = <String>[];
+    final srcs = raw['sources'];
+    if (srcs is List) {
+      for (final s in srcs) {
+        final sid = s is Map ? _str(s['id']) : _str(s);
+        if (sid.isNotEmpty && !streamIds.contains(sid)) streamIds.add(sid);
+      }
     }
+    if (streamIds.isEmpty && id.isNotEmpty) streamIds.add(id);
+
+    final sources = <_StreamOption>[];
+    for (var i = 0; i < streamIds.length; i++) {
+      final sid = Uri.encodeComponent(streamIds[i]);
+      final prefix = streamIds.length > 1 ? 'Feed ${i + 1} · ' : '';
+      for (final server in _ntvServers) {
+        final name = server[0].toUpperCase() + server.substring(1);
+        sources.add(_StreamOption(
+          label: '$prefix$name',
+          url: '$origin/watch/$server/$sid',
+        ));
+      }
+    }
+
+    out.add(_LiveEvent(
+      id: id,
+      title: _str(raw['title']).isNotEmpty ? _str(raw['title']) : id,
+      category: _prettyCategory(_str(raw['category'])),
+      poster: _absUrl(raw['poster'], origin),
+      homeTeam: _teamName(raw['teams'], 'home'),
+      homeBadge: _teamBadge(raw['teams'], 'home', origin),
+      awayTeam: _teamName(raw['teams'], 'away'),
+      awayBadge: _teamBadge(raw['teams'], 'away', origin),
+      isLive: raw['live'] == true,
+      start: _fromMs(raw['date']),
+      sources: sources,
+    ));
   }
-  return result;
+  _sortEvents(out);
+  return out;
 }
+
+Future<List<_LiveEvent>> _fetchFor(_DataProvider p) => switch (p) {
+      _DataProvider.damiTv => _fetchDamiTv(),
+      _DataProvider.sportsBite => _fetchSportsBite(),
+      _DataProvider.ntvStream => _fetchNtvStream(),
+    };
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  MAIN SCREEN
@@ -303,21 +454,16 @@ class LiveMatchesScreen extends StatefulWidget {
 
 class _LiveMatchesScreenState extends State<LiveMatchesScreen>
     with TickerProviderStateMixin {
-  // tabs: All + each sport
   List<_Sport> _sports = [];
   bool _loading = true;
   String? _error;
-
-  // selected sport filter ('all' = no filter)
   String _sportFilter = 'all';
+  bool _liveOnly = false;
 
   TabController? _tabController;
   _DataProvider _provider = _DataProvider.damiTv;
-  List<_DamiTvStream> _damiTvStreams = [];
-  List<_PpvStream> _ppvStreams = [];
-  List<_CdnChannel> _cdnChannels = [];
-  List<_CdnSportEvent> _cdnSports = [];
-  bool _cdnShowChannels = true; // true = channels, false = sports
+  List<_LiveEvent> _events = [];
+  int _loadToken = 0;
 
   @override
   void initState() {
@@ -326,137 +472,58 @@ class _LiveMatchesScreenState extends State<LiveMatchesScreen>
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; _sportFilter = 'all'; });
-    if (_provider == _DataProvider.damiTv) {
-      await _loadDamiTv();
-      return;
-    }
-    if (_provider == _DataProvider.ppv) {
-      await _loadPpv();
-      return;
-    }
-    if (_provider == _DataProvider.cdnLive) {
-      await _loadCdn();
-      return;
-    }
-  }
-
-  Future<void> _loadDamiTv() async {
+    final token = ++_loadToken;
+    final provider = _provider;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _sportFilter = 'all';
+    });
     try {
-      final streams = await _fetchDamiTvStreams();
-      final seenCats = <String>{};
+      final events = await _fetchFor(provider);
+      // Ignore results if the user switched provider mid-load.
+      if (!mounted || token != _loadToken) return;
+
+      final seen = <String>{};
       final cats = <_Sport>[];
-      for (final s in streams) {
-        if (s.categoryName.isNotEmpty && seenCats.add(s.categoryName)) {
-          cats.add(_Sport(id: s.categoryName, name: s.categoryName));
+      for (final e in events) {
+        if (seen.add(e.category)) cats.add(_Sport(id: e.category, name: e.category));
+      }
+      cats.sort((a, b) => a.name.compareTo(b.name));
+
+      final oldCtrl = _tabController;
+      setState(() {
+        _tabController = null;
+        _events = events;
+        _sports = cats;
+        _loading = false;
+      });
+      oldCtrl?.dispose();
+
+      final newCtrl = TabController(length: cats.length + 1, vsync: this);
+      newCtrl.addListener(() {
+        if (!newCtrl.indexIsChanging) {
+          final idx = newCtrl.index;
+          setState(() => _sportFilter = idx == 0 ? 'all' : cats[idx - 1].id);
         }
-      }
-      if (mounted) {
-        final oldCtrl = _tabController;
-        setState(() {
-          _tabController = null;
-          _damiTvStreams = streams;
-          _sports = cats;
-          _loading = false;
-        });
-        oldCtrl?.dispose();
-        final newCtrl = TabController(length: cats.length + 1, vsync: this);
-        newCtrl.addListener(() {
-          if (!newCtrl.indexIsChanging) {
-            final idx = newCtrl.index;
-            setState(() => _sportFilter = idx == 0 ? 'all' : cats[idx - 1].id);
-          }
-        });
-        if (mounted) setState(() => _tabController = newCtrl);
-      }
+      });
+      if (mounted) setState(() => _tabController = newCtrl);
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+      if (!mounted || token != _loadToken) return;
+      setState(() {
+        _loading = false;
+        _events = [];
+        _sports = [];
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
     }
   }
 
-  Future<void> _loadPpv() async {
-    try {
-      final streams = await _fetchPpvStreams();
-      // Build category tabs from unique categories in streams
-      final seenCats = <String>{};
-      final cats = <_Sport>[];
-      for (final s in streams) {
-        if (s.category.isNotEmpty && seenCats.add(s.category)) {
-          cats.add(_Sport(id: s.category, name: s.category));
-        }
-      }
-      if (mounted) {
-        final oldCtrl = _tabController;
-        setState(() {
-          _tabController = null;
-          _ppvStreams = streams;
-          _sports = cats;
-          _loading = false;
-        });
-        oldCtrl?.dispose();
-        final newCtrl = TabController(length: cats.length + 1, vsync: this);
-        newCtrl.addListener(() {
-          if (!newCtrl.indexIsChanging) {
-            final idx = newCtrl.index;
-            setState(() => _sportFilter = idx == 0 ? 'all' : cats[idx - 1].id);
-          }
-        });
-        if (mounted) setState(() => _tabController = newCtrl);
-      }
-    } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
-    }
-  }
-
-  Future<void> _loadCdn() async {
-    try {
-      final results = await Future.wait([
-        _fetchCdnChannels(),
-        _fetchCdnSports(),
-      ]);
-      final channels = results[0] as List<_CdnChannel>;
-      final sports = results[1] as List<_CdnSportEvent>;
-      
-      // Build categories from sports
-      final seenCats = <String>{};
-      final cats = <_Sport>[];
-      for (final s in sports) {
-        if (s.tournament.isNotEmpty && seenCats.add(s.tournament)) {
-          cats.add(_Sport(id: s.tournament, name: s.tournament));
-        }
-      }
-      
-      if (mounted) {
-        final oldCtrl = _tabController;
-        setState(() {
-          _tabController = null;
-          _cdnChannels = channels;
-          _cdnSports = sports;
-          _sports = cats;
-          _loading = false;
-        });
-        oldCtrl?.dispose();
-        final newCtrl = TabController(length: cats.length + 1, vsync: this);
-        newCtrl.addListener(() {
-          if (!newCtrl.indexIsChanging) {
-            final idx = newCtrl.index;
-            setState(() => _sportFilter = idx == 0 ? 'all' : cats[idx - 1].id);
-          }
-        });
-        if (mounted) setState(() => _tabController = newCtrl);
-      }
-    } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
-    }
-  }
-
-  List<_PpvStream> get _filteredPpv => _sportFilter == 'all'
-      ? _ppvStreams
-      : _ppvStreams.where((s) => s.category == _sportFilter).toList();
-
-  List<_DamiTvStream> get _filteredDamiTv => _sportFilter == 'all'
-      ? _damiTvStreams
-      : _damiTvStreams.where((s) => s.categoryName == _sportFilter).toList();
+  List<_LiveEvent> get _filtered => _events.where((e) {
+        if (_sportFilter != 'all' && e.category != _sportFilter) return false;
+        if (_liveOnly && !e.isLive && !e.alwaysOn) return false;
+        return true;
+      }).toList();
 
   @override
   void dispose() {
@@ -515,24 +582,25 @@ class _LiveMatchesScreenState extends State<LiveMatchesScreen>
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _ModeChip(
-              label: '📺 Dami TV',
-              active: _provider == _DataProvider.damiTv,
-              onTap: () {
-                if (_provider == _DataProvider.damiTv) return;
-                setState(() { _provider = _DataProvider.damiTv; });
-                _load();
-              },
-            ),
+            for (final p in _DataProvider.values) ...[
+              _ModeChip(
+                label: p.chipLabel,
+                active: _provider == p,
+                onTap: () {
+                  if (_provider == p) return;
+                  setState(() => _provider = p);
+                  _load();
+                },
+              ),
+              const SizedBox(width: 8),
+            ],
             const SizedBox(width: 8),
+            Container(width: 1, height: 24, color: Colors.white24),
+            const SizedBox(width: 16),
             _ModeChip(
-              label: '🎬 PPV.to',
-              active: _provider == _DataProvider.ppv,
-              onTap: () {
-                if (_provider == _DataProvider.ppv) return;
-                setState(() { _provider = _DataProvider.ppv; });
-                _load();
-              },
+              label: '🔴 Live only',
+              active: _liveOnly,
+              onTap: () => setState(() => _liveOnly = !_liveOnly),
             ),
           ],
         ),
@@ -540,7 +608,6 @@ class _LiveMatchesScreenState extends State<LiveMatchesScreen>
     );
   }
 
- 
   Widget _buildSportTabs() {
     final tabs = [
       const Tab(text: 'All'),
@@ -564,40 +631,44 @@ class _LiveMatchesScreenState extends State<LiveMatchesScreen>
     }
     if (_error != null) {
       return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+              const SizedBox(height: 12),
+              Text("Couldn't load ${_provider.label}",
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white54)),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final events = _filtered;
+    if (events.isEmpty) {
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
-            const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: Colors.white54)),
+            const Icon(Icons.sports_rounded, color: Colors.white24, size: 64),
             const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _load,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+            Text(
+              _liveOnly ? 'Nothing live right now' : 'No streams available',
+              style: const TextStyle(color: Colors.white38, fontSize: 16),
             ),
-          ],
-        ),
-      );
-    }
-    if (_provider == _DataProvider.damiTv) return _buildDamiTvBody();
-    if (_provider == _DataProvider.ppv) return _buildPpvBody();
-    if (_provider == _DataProvider.cdnLive) return _buildCdnBody();
-
-    return const SizedBox.shrink();
-  }
-
-  Widget _buildDamiTvBody() {
-    final streams = _filteredDamiTv;
-    if (streams.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.sports_rounded, color: Colors.white24, size: 64),
-            SizedBox(height: 16),
-            Text('No streams available', style: TextStyle(color: Colors.white38, fontSize: 16)),
           ],
         ),
       );
@@ -612,209 +683,27 @@ class _LiveMatchesScreenState extends State<LiveMatchesScreen>
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
         ),
-        itemCount: streams.length,
-        itemBuilder: (context, i) => _DamiTvMatchCard(
-          stream: streams[i],
-          onTap: () => _openDamiTvStream(streams[i]),
+        itemCount: events.length,
+        itemBuilder: (context, i) => _LiveEventCard(
+          event: events[i],
+          onTap: () => _openEvent(events[i]),
         ),
       );
     });
   }
 
-  Widget _buildPpvBody() {
-    final streams = _filteredPpv;
-    if (streams.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.sports_rounded, color: Colors.white24, size: 64),
-            SizedBox(height: 16),
-            Text('No streams available', style: TextStyle(color: Colors.white38, fontSize: 16)),
-          ],
-        ),
-      );
-    }
-    return LayoutBuilder(builder: (context, constraints) {
-      final crossCount = (constraints.maxWidth / 300).floor().clamp(1, 6);
-      return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossCount,
-          mainAxisExtent: 200,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-        ),
-        itemCount: streams.length,
-        itemBuilder: (context, i) => _PpvMatchCard(
-          stream: streams[i],
-          onTap: () => _openPpvStream(streams[i]),
-        ),
-      );
-    });
-  }
-
-  Widget _buildCdnBody() {
-    if (_cdnShowChannels) {
-      final channels = _cdnChannels.where((c) => c.status == 'online').toList();
-      if (channels.isEmpty) {
-        return const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.tv_rounded, color: Colors.white24, size: 64),
-              SizedBox(height: 16),
-              Text('No channels available', style: TextStyle(color: Colors.white38, fontSize: 16)),
-            ],
-          ),
-        );
-      }
-      return Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Row(
-              children: [
-                _ModeChip(label: '📺 Channels', active: _cdnShowChannels, onTap: () => setState(() => _cdnShowChannels = true)),
-                const SizedBox(width: 8),
-                _ModeChip(label: '⚽ Sports', active: !_cdnShowChannels, onTap: () => setState(() => _cdnShowChannels = false)),
-              ],
-            ),
-          ),
-          Expanded(
-            child: LayoutBuilder(builder: (context, constraints) {
-              final crossCount = (constraints.maxWidth / 280).floor().clamp(1, 6);
-              return GridView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: crossCount,
-                  mainAxisExtent: 160,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: channels.length,
-                itemBuilder: (context, i) => _CdnChannelCard(
-                  channel: channels[i],
-                  onTap: () => _openCdnChannel(channels[i]),
-                ),
-              );
-            }),
-          ),
-        ],
-      );
-    } else {
-      final sports = _sportFilter == 'all'
-          ? _cdnSports
-          : _cdnSports.where((s) => s.tournament == _sportFilter).toList();
-      if (sports.isEmpty) {
-        return const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.sports_rounded, color: Colors.white24, size: 64),
-              SizedBox(height: 16),
-              Text('No sports events available', style: TextStyle(color: Colors.white38, fontSize: 16)),
-            ],
-          ),
-        );
-      }
-      return Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Row(
-              children: [
-                _ModeChip(label: '📺 Channels', active: _cdnShowChannels, onTap: () => setState(() => _cdnShowChannels = true)),
-                const SizedBox(width: 8),
-                _ModeChip(label: '⚽ Sports', active: !_cdnShowChannels, onTap: () => setState(() => _cdnShowChannels = false)),
-              ],
-            ),
-          ),
-          Expanded(
-            child: LayoutBuilder(builder: (context, constraints) {
-              final crossCount = (constraints.maxWidth / 300).floor().clamp(1, 6);
-              return GridView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: crossCount,
-                  mainAxisExtent: 200,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: sports.length,
-                itemBuilder: (context, i) => _CdnSportCard(
-                  event: sports[i],
-                  onTap: () => _openCdnSportEvent(sports[i]),
-                ),
-              );
-            }),
-          ),
-        ],
-      );
-    }
-  }
-
-  void _openDamiTvStream(_DamiTvStream s) {
-    if (s.iframe.isEmpty) {
+  void _openEvent(_LiveEvent e) {
+    if (e.sources.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Stream not yet available for this event')),
       );
       return;
     }
     Navigator.push(context, MaterialPageRoute(
-      builder: (_) => _DamiTvPlayerScreen(stream: s),
+      builder: (_) => _LivePlayerScreen(event: e, provider: _provider),
     ));
   }
-
-  void _openCdnChannel(_CdnChannel channel) {
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => _CdnPlayerScreen(url: channel.url, title: channel.name),
-    ));
-  }
-
-  void _openCdnSportEvent(_CdnSportEvent event) {
-    if (event.channels.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No channels available for this event')),
-      );
-      return;
-    }
-    if (event.channels.length == 1) {
-      _openCdnChannel(event.channels.first);
-      return;
-    }
-    // Show channel selection
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _CdnChannelSheet(
-        event: event,
-        onChannelSelected: (ch) {
-          Navigator.pop(context);
-          _openCdnChannel(ch);
-        },
-      ),
-    );
-  }
-
-  void _openPpvStream(_PpvStream s) {
-    if (s.iframe == null || s.iframe!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Stream not yet available for this event')),
-      );
-      return;
-    }
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => _PpvPlayerScreen(stream: s),
-    ));
-  }
-
-  // End of screen state
 }
-
-enum _DataProvider { damiTv, ppv, cdnLive }
 
 // ─── Chips ────────────────────────────────────────────────────────────────────
 
@@ -847,7 +736,6 @@ class _ModeChip extends StatelessWidget {
   }
 }
 
- 
 class _TeamBadge extends StatelessWidget {
   final String? badge;
   final String name;
@@ -855,6 +743,8 @@ class _TeamBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final initial = Text(name.isNotEmpty ? name[0] : '?',
+        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold));
     return Column(
       children: [
         CircleAvatar(
@@ -864,17 +754,13 @@ class _TeamBadge extends StatelessWidget {
               ? CachedNetworkImage(
                   imageUrl: badge!,
                   width: 38, height: 38, fit: BoxFit.contain,
-                  errorWidget: (_, _, _) => Text(
-                    name.isNotEmpty ? name[0] : '?',
-                    style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
-                  ),
+                  errorWidget: (_, _, _) => initial,
                 )
-              : Text(name.isNotEmpty ? name[0] : '?',
-                  style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+              : initial,
         ),
         const SizedBox(height: 4),
         SizedBox(
-          width: 60,
+          width: 70,
           child: Text(name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -886,392 +772,30 @@ class _TeamBadge extends StatelessWidget {
   }
 }
 
-// ─── PPV Match Card ───────────────────────────────────────────────────────────
+// ─── Event Card ───────────────────────────────────────────────────────────────
 
-class _PpvMatchCard extends StatefulWidget {
-  final _PpvStream stream;
+class _LiveEventCard extends StatefulWidget {
+  final _LiveEvent event;
   final VoidCallback onTap;
-  const _PpvMatchCard({required this.stream, required this.onTap});
+  const _LiveEventCard({required this.event, required this.onTap});
 
   @override
-  State<_PpvMatchCard> createState() => _PpvMatchCardState();
+  State<_LiveEventCard> createState() => _LiveEventCardState();
 }
 
-class _PpvMatchCardState extends State<_PpvMatchCard> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.stream;
-    final hasIframe = s.iframe != null && s.iframe!.isNotEmpty;
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: _hovered ? Colors.white.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.06),
-            border: Border.all(
-              color: _hovered ? AppTheme.primaryColor.withValues(alpha: 0.6) : Colors.white12,
-              width: 1.5,
-            ),
-            boxShadow: _hovered
-                ? [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.25), blurRadius: 16, spreadRadius: 2)]
-                : null,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(15),
-            child: Stack(
-              children: [
-                // poster background
-                if (s.poster != null && s.poster!.isNotEmpty)
-                  Positioned.fill(
-                    child: CachedNetworkImage(
-                      imageUrl: s.poster!,
-                      fit: BoxFit.cover,
-                      errorWidget: (_, _, _) => const SizedBox.shrink(),
-                    ),
-                  ),
-                // dark gradient overlay
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.45),
-                          Colors.black.withValues(alpha: 0.90),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                // content
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        s.name,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
-                      if (s.tag.isNotEmpty) ...[  
-                        const SizedBox(height: 6),
-                        Text(s.tag,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white54, fontSize: 10.5)),
-                      ],
-                    ],
-                  ),
-                ),
-                // time label top-right
-                if (s.timeLabel.isNotEmpty)
-                  Positioned(
-                    top: 10, right: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: s.timeLabel.contains('Live') ? Colors.red.shade700 : Colors.black54,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(s.timeLabel,
-                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                // category top-left
-                Positioned(
-                  top: 10, left: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(s.category.toUpperCase(),
-                        style: const TextStyle(color: Colors.white60, fontSize: 9, letterSpacing: 0.8)),
-                  ),
-                ),
-                // no iframe warning bottom
-                if (!hasIframe)
-                  Positioned(
-                    bottom: 8, left: 0, right: 0,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withValues(alpha: 0.8),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text('Not yet available',
-                            style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                  ),
-                // play overlay on hover
-                if (_hovered && hasIframe)
-                  Positioned.fill(
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                            color: AppTheme.primaryColor.withValues(alpha: 0.85),
-                            shape: BoxShape.circle),
-                        child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── PPV WebView Player ───────────────────────────────────────────────────────
-
-class _PpvPlayerScreen extends StatefulWidget {
-  final _PpvStream stream;
-  const _PpvPlayerScreen({required this.stream});
-
-  @override
-  State<_PpvPlayerScreen> createState() => _PpvPlayerScreenState();
-}
-
-class _PpvPlayerScreenState extends State<_PpvPlayerScreen> {
-  bool _loading = true;
-  bool _isFullscreen = false;
-
-  void _enterFullscreen() async {
-    setState(() => _isFullscreen = true);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-    ]);
-  }
-
-  void _exitFullscreen() async {
-    setState(() => _isFullscreen = false);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([]);
-  }
-
-  @override
-  void dispose() {
-    SystemChrome.setPreferredOrientations([]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final embedUrl = widget.stream.iframe!;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: _isFullscreen ? null : AppBar(
-        backgroundColor: Colors.black,
-        title: Text(widget.stream.name,
-            style: const TextStyle(color: Colors.white, fontSize: 15),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                    color: Colors.teal.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.teal)),
-                child: const Text('PPV.to', style: TextStyle(color: Colors.teal, fontSize: 10, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          InAppWebView(
-            initialUrlRequest: URLRequest(url: WebUri(embedUrl)),
-            initialSettings: InAppWebViewSettings(
-              mediaPlaybackRequiresUserGesture: false,
-              allowsInlineMediaPlayback: true,
-              javaScriptEnabled: true,
-              disableDefaultErrorPage: true,
-              supportMultipleWindows: false,
-            ),
-            onLoadStart: (_, _) => setState(() => _loading = true),
-            onLoadStop:  (_, _) => setState(() => _loading = false),
-            onEnterFullscreen: (_) => _enterFullscreen(),
-            onExitFullscreen:  (_) => _exitFullscreen(),
-            shouldOverrideUrlLoading: (ctrl, action) async {
-              final url = action.request.url?.toString() ?? '';
-              final embedHost = Uri.tryParse(embedUrl)?.host ?? '';
-              if (embedHost.isNotEmpty && !url.contains(embedHost)) {
-                http.get(Uri.parse(url), headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                      'AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/122.0.0.0 Safari/537.36',
-                  'Referer': embedUrl,
-                }).catchError((_) => http.Response('', 200));
-                return NavigationActionPolicy.CANCEL;
-              }
-              return NavigationActionPolicy.ALLOW;
-            },
-          ),
-          if (_loading)
-            const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
-        ],
-      ),
-    );
-  }
-}
-
- 
-
-// ─── CDN Channel Card ─────────────────────────────────────────────────────────
-
-class _CdnChannelCard extends StatefulWidget {
-  final _CdnChannel channel;
-  final VoidCallback onTap;
-  const _CdnChannelCard({required this.channel, required this.onTap});
-
-  @override
-  State<_CdnChannelCard> createState() => _CdnChannelCardState();
-}
-
-class _CdnChannelCardState extends State<_CdnChannelCard> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.channel;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: _hovered ? Colors.white.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.06),
-            border: Border.all(
-              color: _hovered ? AppTheme.primaryColor.withValues(alpha: 0.6) : Colors.white12,
-              width: 1.5,
-            ),
-            boxShadow: _hovered
-                ? [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.25), blurRadius: 16, spreadRadius: 2)]
-                : null,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(15),
-            child: Stack(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (c.image.isNotEmpty)
-                        CachedNetworkImage(
-                          imageUrl: c.image,
-                          height: 60,
-                          fit: BoxFit.contain,
-                          errorWidget: (_, _, _) => const Icon(Icons.tv_rounded, color: Colors.white38, size: 48),
-                        )
-                      else
-                        const Icon(Icons.tv_rounded, color: Colors.white38, size: 48),
-                      const SizedBox(height: 12),
-                      Text(
-                        c.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
-                      if (c.viewers > 0) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          '${c.viewers} viewers',
-                          style: const TextStyle(color: Colors.white54, fontSize: 10),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                Positioned(
-                  top: 10, right: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade700,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text('● LIVE',
-                        style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                if (_hovered)
-                  Positioned.fill(
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                            color: AppTheme.primaryColor.withValues(alpha: 0.85),
-                            shape: BoxShape.circle),
-                        child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── CDN Sport Event Card ─────────────────────────────────────────────────────
-
-class _CdnSportCard extends StatefulWidget {
-  final _CdnSportEvent event;
-  final VoidCallback onTap;
-  const _CdnSportCard({required this.event, required this.onTap});
-
-  @override
-  State<_CdnSportCard> createState() => _CdnSportCardState();
-}
-
-class _CdnSportCardState extends State<_CdnSportCard> {
+class _LiveEventCardState extends State<_LiveEventCard> {
   bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
     final e = widget.event;
+    final playable = e.sources.isNotEmpty;
+    final time = e.timeLabel;
+
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
+      onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
@@ -1291,303 +815,14 @@ class _CdnSportCardState extends State<_CdnSportCard> {
             borderRadius: BorderRadius.circular(15),
             child: Stack(
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Column(
-                            children: [
-                              if (e.homeTeamIMG.isNotEmpty)
-                                CachedNetworkImage(
-                                  imageUrl: e.homeTeamIMG,
-                                  width: 40, height: 40,
-                                  errorWidget: (_, _, _) => const Icon(Icons.sports_rounded, color: Colors.white38, size: 32),
-                                )
-                              else
-                                const Icon(Icons.sports_rounded, color: Colors.white38, size: 32),
-                              const SizedBox(height: 4),
-                              SizedBox(
-                                width: 60,
-                                child: Text(e.homeTeam, maxLines: 1, overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                              ),
-                            ],
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text('VS',
-                                style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.7),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800)),
-                          ),
-                          Column(
-                            children: [
-                              if (e.awayTeamIMG.isNotEmpty)
-                                CachedNetworkImage(
-                                  imageUrl: e.awayTeamIMG,
-                                  width: 40, height: 40,
-                                  errorWidget: (_, _, _) => const Icon(Icons.sports_rounded, color: Colors.white38, size: 32),
-                                )
-                              else
-                                const Icon(Icons.sports_rounded, color: Colors.white38, size: 32),
-                              const SizedBox(height: 4),
-                              SizedBox(
-                                width: 60,
-                                child: Text(e.awayTeam, maxLines: 1, overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        e.tournament,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  top: 10, right: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: e.status == 'live' ? Colors.red.shade700 : Colors.orange.shade700,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(e.status == 'live' ? '● LIVE' : e.status.toUpperCase(),
-                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                if (_hovered)
-                  Positioned.fill(
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                            color: AppTheme.primaryColor.withValues(alpha: 0.85),
-                            shape: BoxShape.circle),
-                        child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── CDN Channel Sheet ────────────────────────────────────────────────────────
-
-class _CdnChannelSheet extends StatelessWidget {
-  final _CdnSportEvent event;
-  final void Function(_CdnChannel) onChannelSelected;
-  const _CdnChannelSheet({required this.event, required this.onChannelSelected});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(child: Container(width: 40, height: 4,
-              decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)))),
-          const SizedBox(height: 20),
-          Text('${event.homeTeam} vs ${event.awayTeam}',
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
-          const Text('Choose a channel:', style: TextStyle(color: Colors.white54, fontSize: 13)),
-          const SizedBox(height: 16),
-          ...event.channels.map((ch) => ListTile(
-            onTap: () => onChannelSelected(ch),
-            leading: ch.image.isNotEmpty
-                ? CachedNetworkImage(imageUrl: ch.image, width: 32, height: 32, fit: BoxFit.contain,
-                    errorWidget: (_, _, _) => const Icon(Icons.tv_rounded, color: AppTheme.primaryColor))
-                : const Icon(Icons.tv_rounded, color: AppTheme.primaryColor),
-            title: Text(ch.name,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-            subtitle: ch.viewers > 0
-                ? Text('${ch.viewers} viewers', style: const TextStyle(color: Colors.white38, fontSize: 11))
-                : null,
-            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-          )),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── CDN Player Screen ────────────────────────────────────────────────────────
-
-class _CdnPlayerScreen extends StatefulWidget {
-  final String url;
-  final String title;
-  const _CdnPlayerScreen({required this.url, required this.title});
-
-  @override
-  State<_CdnPlayerScreen> createState() => _CdnPlayerScreenState();
-}
-
-class _CdnPlayerScreenState extends State<_CdnPlayerScreen> {
-  bool _loading = true;
-  bool _isFullscreen = false;
-
-  void _enterFullscreen() async {
-    setState(() => _isFullscreen = true);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-    ]);
-  }
-
-  void _exitFullscreen() async {
-    setState(() => _isFullscreen = false);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([]);
-  }
-
-  @override
-  void dispose() {
-    SystemChrome.setPreferredOrientations([]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: _isFullscreen ? null : AppBar(
-        backgroundColor: Colors.black,
-        title: Text(widget.title,
-            style: const TextStyle(color: Colors.white, fontSize: 15),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.blue)),
-                child: const Text('CDN Live', style: TextStyle(color: Colors.blue, fontSize: 10, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          InAppWebView(
-            initialUrlRequest: URLRequest(url: WebUri(widget.url)),
-            initialSettings: InAppWebViewSettings(
-              mediaPlaybackRequiresUserGesture: false,
-              allowsInlineMediaPlayback: true,
-              javaScriptEnabled: true,
-              disableDefaultErrorPage: true,
-              supportMultipleWindows: false,
-            ),
-            onLoadStart: (_, _) => setState(() => _loading = true),
-            onLoadStop:  (_, _) => setState(() => _loading = false),
-            onEnterFullscreen: (_) => _enterFullscreen(),
-            onExitFullscreen:  (_) => _exitFullscreen(),
-            shouldOverrideUrlLoading: (ctrl, action) async {
-              final url = action.request.url?.toString() ?? '';
-              final embedHost = Uri.tryParse(widget.url)?.host ?? '';
-              if (embedHost.isNotEmpty && !url.contains(embedHost)) {
-                http.get(Uri.parse(url), headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                      'AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/122.0.0.0 Safari/537.36',
-                  'Referer': widget.url,
-                }).catchError((_) => http.Response('', 200));
-                return NavigationActionPolicy.CANCEL;
-              }
-              return NavigationActionPolicy.ALLOW;
-            },
-          ),
-          if (_loading)
-            const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Dami TV Match Card ───────────────────────────────────────────────────────
-
-class _DamiTvMatchCard extends StatefulWidget {
-  final _DamiTvStream stream;
-  final VoidCallback onTap;
-  const _DamiTvMatchCard({required this.stream, required this.onTap});
-
-  @override
-  State<_DamiTvMatchCard> createState() => _DamiTvMatchCardState();
-}
-
-class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.stream;
-    final hasIframe = s.iframe.isNotEmpty;
-    final hasTeams = s.homeTeam != null && s.awayTeam != null;
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: _hovered ? Colors.white.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.06),
-            border: Border.all(
-              color: _hovered ? AppTheme.primaryColor.withValues(alpha: 0.6) : Colors.white12,
-              width: 1.5,
-            ),
-            boxShadow: _hovered
-                ? [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.25), blurRadius: 16, spreadRadius: 2)]
-                : null,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(15),
-            child: Stack(
-              children: [
-                // poster background
-                if (s.poster.isNotEmpty)
+                if (e.poster != null && e.poster!.isNotEmpty)
                   Positioned.fill(
                     child: CachedNetworkImage(
-                      imageUrl: s.poster,
+                      imageUrl: e.poster!,
                       fit: BoxFit.cover,
                       errorWidget: (_, _, _) => const SizedBox.shrink(),
                     ),
                   ),
-                // dark gradient overlay
                 Positioned.fill(
                   child: Container(
                     decoration: BoxDecoration(
@@ -1602,18 +837,17 @@ class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
                     ),
                   ),
                 ),
-                // content
                 Padding(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.fromLTRB(14, 34, 14, 14),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (hasTeams) ...[
+                      if (e.hasTeams) ...[
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            _TeamBadge(badge: s.homeBadge, name: s.homeTeam!),
+                            _TeamBadge(badge: e.homeBadge, name: e.homeTeam!),
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 12),
                               child: Text('VS',
@@ -1623,21 +857,21 @@ class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
                                       fontWeight: FontWeight.w800,
                                       letterSpacing: 2)),
                             ),
-                            _TeamBadge(badge: s.awayBadge, name: s.awayTeam!),
+                            _TeamBadge(badge: e.awayBadge, name: e.awayTeam!),
                           ],
                         ),
                         const SizedBox(height: 10),
                       ],
                       Text(
-                        s.name,
-                        maxLines: 2,
+                        e.title,
+                        maxLines: e.hasTeams ? 2 : 3,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                       ),
-                      if (s.league.isNotEmpty) ...[  
+                      if (e.league.isNotEmpty) ...[
                         const SizedBox(height: 6),
-                        Text(s.league,
+                        Text(e.league,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
@@ -1646,35 +880,35 @@ class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
                     ],
                   ),
                 ),
-                // time label top-right
-                if (s.timeLabel.isNotEmpty)
+                if (time.isNotEmpty)
                   Positioned(
                     top: 10, right: 10,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: s.timeLabel.contains('Live') ? Colors.red.shade700 : Colors.black54,
+                        color: time.startsWith('🔴') ? Colors.red.shade700 : Colors.black54,
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Text(s.timeLabel,
+                      child: Text(time,
                           style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
                     ),
                   ),
-                // category top-left
                 Positioned(
                   top: 10, left: 10,
                   child: Container(
+                    constraints: const BoxConstraints(maxWidth: 150),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text(s.categoryName.toUpperCase(),
+                    child: Text(e.category.toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: Colors.white60, fontSize: 9, letterSpacing: 0.8)),
                   ),
                 ),
-                // no iframe warning bottom
-                if (!hasIframe)
+                if (!playable)
                   Positioned(
                     bottom: 8, left: 0, right: 0,
                     child: Center(
@@ -1689,8 +923,7 @@ class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
                       ),
                     ),
                   ),
-                // play overlay on hover
-                if (_hovered && hasIframe)
+                if (_hovered && playable)
                   Positioned.fill(
                     child: Center(
                       child: Container(
@@ -1711,26 +944,28 @@ class _DamiTvMatchCardState extends State<_DamiTvMatchCard> {
   }
 }
 
-// ─── Dami TV WebView Player ───────────────────────────────────────────────────
+// ─── WebView Player ───────────────────────────────────────────────────────────
 
-class _DamiTvPlayerScreen extends StatefulWidget {
-  final _DamiTvStream stream;
-  const _DamiTvPlayerScreen({required this.stream});
+class _LivePlayerScreen extends StatefulWidget {
+  final _LiveEvent event;
+  final _DataProvider provider;
+  const _LivePlayerScreen({required this.event, required this.provider});
 
   @override
-  State<_DamiTvPlayerScreen> createState() => _DamiTvPlayerScreenState();
+  State<_LivePlayerScreen> createState() => _LivePlayerScreenState();
 }
 
-class _DamiTvPlayerScreenState extends State<_DamiTvPlayerScreen> {
+class _LivePlayerScreenState extends State<_LivePlayerScreen> {
   bool _loading = true;
   bool _isFullscreen = false;
+  int _sourceIndex = 0;
+
+  _StreamOption get _source => widget.event.sources[_sourceIndex];
 
   void _enterFullscreen() async {
     setState(() => _isFullscreen = true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-    ]);
+    await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft]);
   }
 
   void _exitFullscreen() async {
@@ -1746,59 +981,142 @@ class _DamiTvPlayerScreenState extends State<_DamiTvPlayerScreen> {
     super.dispose();
   }
 
+  void _pickServer() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Choose a server',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              const Text("If one doesn't play, try another.",
+                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: widget.event.sources.length,
+                  itemBuilder: (_, i) {
+                    final s = widget.event.sources[i];
+                    final selected = i == _sourceIndex;
+                    return ListTile(
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        if (!selected) {
+                          setState(() {
+                            _sourceIndex = i;
+                            _loading = true;
+                          });
+                        }
+                      },
+                      leading: Icon(
+                        selected ? Icons.play_circle_fill_rounded : Icons.dns_rounded,
+                        color: selected ? AppTheme.primaryColor : Colors.white38,
+                      ),
+                      title: Text(s.label,
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: selected ? FontWeight.bold : FontWeight.w500)),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final embedUrl = widget.stream.iframe;
+    final url = _source.url;
+    final color = widget.provider.color;
+    final multi = widget.event.sources.length > 1;
+
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: _isFullscreen ? null : AppBar(
-        backgroundColor: Colors.black,
-        title: Text(widget.stream.name,
-            style: const TextStyle(color: Colors.white, fontSize: 15),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.blue)),
-                child: const Text('Dami TV', style: TextStyle(color: Colors.blue, fontSize: 10, fontWeight: FontWeight.bold)),
-              ),
+      appBar: _isFullscreen
+          ? null
+          : AppBar(
+              backgroundColor: Colors.black,
+              title: Text(widget.event.title,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+              iconTheme: const IconThemeData(color: Colors.white),
+              actions: [
+                if (multi)
+                  TextButton.icon(
+                    onPressed: _pickServer,
+                    icon: const Icon(Icons.dns_rounded, size: 18, color: Colors.white70),
+                    label: Text(_source.label,
+                        style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12, left: 4),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: color)),
+                      child: Text(widget.provider.label,
+                          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
-      ),
       body: Stack(
         children: [
           InAppWebView(
-            initialUrlRequest: URLRequest(url: WebUri(embedUrl)),
+            key: ValueKey(url),
+            initialUrlRequest: URLRequest(
+              url: WebUri(url),
+              headers: {'Referer': '${Uri.parse(url).origin}/'},
+            ),
             initialSettings: InAppWebViewSettings(
               mediaPlaybackRequiresUserGesture: false,
               allowsInlineMediaPlayback: true,
               javaScriptEnabled: true,
               disableDefaultErrorPage: true,
               supportMultipleWindows: false,
+              useShouldOverrideUrlLoading: true,
+              userAgent: _userAgent,
             ),
             onLoadStart: (_, _) => setState(() => _loading = true),
-            onLoadStop:  (_, _) => setState(() => _loading = false),
+            onLoadStop: (_, _) => setState(() => _loading = false),
             onEnterFullscreen: (_) => _enterFullscreen(),
-            onExitFullscreen:  (_) => _exitFullscreen(),
+            onExitFullscreen: (_) => _exitFullscreen(),
+            // Pop-up / redirect ads: keep the top-level page on the player's
+            // own site. Embedded iframes (the actual video) are left alone.
             shouldOverrideUrlLoading: (ctrl, action) async {
-              final url = action.request.url?.toString() ?? '';
-              final embedHost = Uri.tryParse(embedUrl)?.host ?? '';
-              if (embedHost.isNotEmpty && !url.contains(embedHost)) {
-                http.get(Uri.parse(url), headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                      'AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/122.0.0.0 Safari/537.36',
-                  'Referer': embedUrl,
-                }).catchError((_) => http.Response('', 200));
+              if (action.isForMainFrame != true) {
+                return NavigationActionPolicy.ALLOW;
+              }
+              final target = action.request.url?.host ?? '';
+              final home = Uri.tryParse(url)?.host ?? '';
+              if (home.isNotEmpty && target.isNotEmpty && target != home &&
+                  !target.endsWith('.$home')) {
                 return NavigationActionPolicy.CANCEL;
               }
               return NavigationActionPolicy.ALLOW;
@@ -1806,6 +1124,17 @@ class _DamiTvPlayerScreenState extends State<_DamiTvPlayerScreen> {
           ),
           if (_loading)
             const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
+          if (multi && !_isFullscreen)
+            Positioned(
+              right: 16, bottom: 16,
+              child: FloatingActionButton.small(
+                heroTag: null,
+                tooltip: 'Switch server',
+                backgroundColor: AppTheme.primaryColor,
+                onPressed: _pickServer,
+                child: const Icon(Icons.swap_horiz_rounded, color: Colors.white),
+              ),
+            ),
         ],
       ),
     );
