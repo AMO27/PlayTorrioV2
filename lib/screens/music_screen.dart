@@ -87,12 +87,14 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   /// since the "added to queue" snackbar only means it was accepted.
   void _onDownloadResult(DownloadResultEvent event) {
     if (!mounted) return;
+    final message = event.success
+        ? 'Downloaded: ${event.track.title}'
+        : 'Download failed: ${event.track.title}${event.error != null ? ' — ${event.error}' : ''}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(event.success
-          ? 'Downloaded: ${event.track.title}'
-          : 'Download failed: ${event.track.title}'),
+      content: Text(message),
       backgroundColor: event.success ? AppTheme.bgCard : Colors.red.shade900,
       behavior: SnackBarBehavior.floating,
+      duration: Duration(seconds: event.success ? 4 : 8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }

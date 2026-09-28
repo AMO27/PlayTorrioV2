@@ -132,16 +132,29 @@ class MusicDownloaderService {
       final cleanName = "${track.title} - ${track.artist}".replaceAll(RegExp(r'[<>:"/\\|?*]'), '');
       final file = File('${dir.path}/$cleanName.mp3');
       
-      // 5. Download Stream
-      final request = http.Request('GET', Uri.parse(streamUrl));
-      final httpResponse = await http.Client().send(request);
-      if (httpResponse.statusCode != 200) {
-        throw Exception('Stream request failed with status ${httpResponse.statusCode}');
+      // 5. Download Stream. googlevideo URLs are sometimes rejected without
+      // a browser-like User-Agent/Referer (the raw Dart http client's
+      // default headers can get a 403 where mpv/yt-dlp's own requests
+      // succeed), so send headers that mirror a normal browser fetch.
+      final client = http.Client();
+      try {
+        final request = http.Request('GET', Uri.parse(streamUrl))
+          ..headers.addAll({
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://www.youtube.com/',
+          });
+        final httpResponse = await client.send(request);
+        if (httpResponse.statusCode != 200 && httpResponse.statusCode != 206) {
+          throw Exception('Stream request failed with status ${httpResponse.statusCode}');
+        }
+        final fileStream = file.openWrite();
+        await httpResponse.stream.pipe(fileStream);
+        await fileStream.flush();
+        await fileStream.close();
+      } finally {
+        client.close();
       }
-      final fileStream = file.openWrite();
-      await httpResponse.stream.pipe(fileStream);
-      await fileStream.flush();
-      await fileStream.close();
 
       // 6. Download Cover Art
       String localCoverPath = track.cover;

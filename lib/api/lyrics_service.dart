@@ -29,6 +29,8 @@ class LyricsService {
     required String albumName,
     required int durationSeconds,
   }) async {
+    // Exact match first (requires track/artist/album/duration to all line
+    // up, which lrclib.net is strict about).
     try {
       final uri = Uri.https('lrclib.net', '/api/get', {
         'track_name': trackName,
@@ -48,6 +50,46 @@ class LyricsService {
       }
     } catch (e) {
       debugPrint('LyricsService: Error fetching lyrics: $e');
+    }
+
+    // Fallback: fuzzy search. The exact-match endpoint above 404s the
+    // moment the album title or duration doesn't line up exactly with
+    // lrclib's records (e.g. Deezer's album name has "(Deluxe Edition)"
+    // and lrclib's doesn't), which was making a lot of real matches show
+    // up as "No lyrics available" even though lrclib actually has them.
+    try {
+      final searchUri = Uri.https('lrclib.net', '/api/search', {
+        'track_name': trackName,
+        'artist_name': artistName,
+      });
+      final response = await http.get(searchUri);
+      if (response.statusCode == 200) {
+        final List results = json.decode(response.body);
+        if (results.isNotEmpty) {
+          // Prefer a result whose duration is close to ours, then fall
+          // back to the first result that has synced lyrics at all.
+          Map<String, dynamic>? best;
+          int bestDiff = 1 << 30;
+          for (final r in results) {
+            if (r is! Map) continue;
+            final synced = r['syncedLyrics'];
+            if (synced == null || (synced is String && synced.isEmpty)) continue;
+            final dur = r['duration'];
+            final diff = dur is num ? (dur.toInt() - durationSeconds).abs() : 1 << 29;
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              best = r.cast<String, dynamic>();
+            }
+          }
+          final String? syncedLyrics = best?['syncedLyrics'];
+          if (syncedLyrics != null && syncedLyrics.isNotEmpty) {
+            debugPrint('LyricsService: Received synced lyrics via search fallback (${syncedLyrics.length} chars)');
+            return _parseLrc(syncedLyrics);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('LyricsService: Error searching lyrics: $e');
     }
     return null;
   }

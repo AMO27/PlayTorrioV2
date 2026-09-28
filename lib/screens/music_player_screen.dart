@@ -47,12 +47,14 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
     )..repeat(reverse: true);
     _downloadResultSub = _downloader.onResult.listen((event) {
       if (!mounted) return;
+      final message = event.success
+          ? 'Downloaded: ${event.track.title}'
+          : 'Download failed: ${event.track.title}${event.error != null ? ' — ${event.error}' : ''}';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(event.success
-            ? 'Downloaded: ${event.track.title}'
-            : 'Download failed: ${event.track.title}'),
+        content: Text(message),
         backgroundColor: event.success ? const Color(0xFF1A1030) : Colors.red.shade900,
         behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: event.success ? 4 : 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ));
     });
