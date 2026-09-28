@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
@@ -483,6 +484,9 @@ class _UpdateDialogState extends State<UpdateDialog> with SingleTickerProviderSt
       // Download with progress
       final request = http.Request('GET', Uri.parse(widget.updateInfo.downloadUrl));
       final response = await request.send();
+      if (response.statusCode != 200) {
+        throw Exception('server returned HTTP ${response.statusCode}');
+      }
       
       final contentLength = response.contentLength ?? 0;
       int downloadedBytes = 0;
@@ -506,6 +510,20 @@ class _UpdateDialogState extends State<UpdateDialog> with SingleTickerProviderSt
       }
       
       await sink.close();
+
+      // Integrity check: make sure the file is exactly what the release
+      // published, not something corrupted or swapped in transit.
+      final expected = widget.updateInfo.sha256;
+      if (expected != null && expected.isNotEmpty) {
+        final digest = await crypto.sha256.bind(file.openRead()).first;
+        if (digest.toString().toLowerCase() != expected) {
+          try {
+            await file.delete();
+          } catch (_) {}
+          throw Exception(
+              'the downloaded file failed its integrity check and was deleted');
+        }
+      }
       
       if (mounted) {
         setState(() => _isDownloading = false);

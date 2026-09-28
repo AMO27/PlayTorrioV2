@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show HttpException;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../utils/network_safety.dart';
 
 /// SubtitleCat scraper.
 ///
@@ -306,7 +307,16 @@ class SubtitleCatService {
     required String origUrl,
     required String targetLang,
   }) async {
-    final res = await http.get(Uri.parse(origUrl), headers: _hdrs);
+    // Fetched via the checked sender so a redirect can't point this at a
+    // device on the local network (the URL arrives through the local proxy).
+    final client = http.Client();
+    final http.Response res;
+    try {
+      res = await http.Response.fromStream(await sendToPublicTarget(
+          client, 'GET', Uri.parse(origUrl), _hdrs));
+    } finally {
+      client.close();
+    }
     if (res.statusCode != 200) {
       throw HttpException('orig ${res.statusCode}');
     }

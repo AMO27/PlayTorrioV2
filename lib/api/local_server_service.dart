@@ -8,6 +8,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'package:flutter/foundation.dart';
 import '../scrapers/scraper_aggregator.dart';
 import 'subtitlecat_service.dart';
+import '../utils/network_safety.dart';
 
 class LocalServerService {
   static final LocalServerService _instance = LocalServerService._internal();
@@ -17,6 +18,11 @@ class LocalServerService {
   HttpServer? _server;
   final Router _router = Router();
   int _port = 0;
+
+  /// Jellyfin auth values handed out in proxy URLs this run (see
+  /// _handleJellyfinStream). Kept for the app's lifetime so links made
+  /// before a re-login or account switch keep working.
+  final Set<String> _issuedJellyfinAuth = {};
 
   // Persistent HTTP client for connection reuse (keep-alive)
   final http.Client _httpClient = http.Client();
@@ -85,6 +91,11 @@ class LocalServerService {
       if (orig == null || orig.isEmpty || tl == null || tl.isEmpty) {
         return Response(400,
             body: 'Missing orig or tl',
+            headers: {'content-type': 'text/plain'});
+      }
+      final origUri = Uri.tryParse(orig);
+      if (origUri == null || !await isPublicTarget(origUri)) {
+        return Response.forbidden('Blocked subtitle source',
             headers: {'content-type': 'text/plain'});
       }
       try {
@@ -225,7 +236,8 @@ class LocalServerService {
     };
 
     try {
-      final res = await http.get(Uri.parse(targetUrl), headers: headers);
+      final res = await http.Response.fromStream(await sendToPublicTarget(
+          _httpClient, 'GET', Uri.parse(targetUrl), headers));
       
       if (res.statusCode != 200) {
         debugPrint('[ComicProxy] Error ${res.statusCode} from ${Uri.parse(targetUrl).host}');
@@ -238,6 +250,8 @@ class LocalServerService {
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400',
       });
+    } on BlockedTargetException catch (e) {
+      return Response.forbidden(e.toString());
     } catch (e) {
       debugPrint('[ComicProxy] Fatal Error: $e');
       return Response.internalServerError(body: e.toString());
@@ -259,6 +273,13 @@ class LocalServerService {
 
     if (targetUrl == null || authHeader == null) {
       return Response(400, body: 'Missing url or auth parameter');
+    }
+
+    // Only serve URLs the app itself built with getJellyfinProxyUrl. Those
+    // carry a Jellyfin auth value (including the session token) that a web
+    // page trying to misuse this proxy can't know.
+    if (!_issuedJellyfinAuth.contains(authHeader)) {
+      return Response.forbidden('Not authorized for this Jellyfin session');
     }
 
     final decodedUrl = Uri.decodeComponent(targetUrl);
@@ -362,6 +383,7 @@ class LocalServerService {
 
   /// Returns a local proxy URL for a Jellyfin stream.
   String getJellyfinProxyUrl(String targetUrl, String authHeaderValue) {
+    _issuedJellyfinAuth.add(authHeaderValue);
     return '$baseUrl/jellyfin-stream'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&auth=${Uri.encodeComponent(authHeaderValue)}';
@@ -398,11 +420,8 @@ class LocalServerService {
         debugPrint('[LocalProxy] Range: $range');
       }
 
-      final client = http.Client();
-      final req = http.Request(request.method, Uri.parse(decodedUrl));
-      req.headers.addAll(proxyHeaders);
-      
-      final streamedResponse = await client.send(req);
+      final streamedResponse = await sendToPublicTarget(
+          _httpClient, request.method, Uri.parse(decodedUrl), proxyHeaders);
 
       final responseHeaders = <String, String>{
         'Access-Control-Allow-Origin': '*',
@@ -425,6 +444,8 @@ class LocalServerService {
       }
 
       return Response(streamedResponse.statusCode, body: streamedResponse.stream, headers: responseHeaders);
+    } on BlockedTargetException catch (e) {
+      return Response.forbidden(e.toString());
     } catch (e) {
       return Response.internalServerError(body: 'Proxy error: $e');
     }
@@ -466,9 +487,8 @@ class LocalServerService {
     if (range != null) proxyHeaders['Range'] = range;
 
     try {
-      final req = http.Request(request.method, targetUri);
-      req.headers.addAll(proxyHeaders);
-      final streamedResponse = await _httpClient.send(req);
+      final streamedResponse = await sendToPublicTarget(
+          _httpClient, request.method, targetUri, proxyHeaders);
 
       if (streamedResponse.statusCode >= 400) {
         debugPrint('[HlsProxy] Upstream ${streamedResponse.statusCode} for $decodedUrl');
@@ -543,6 +563,9 @@ class LocalServerService {
       }
 
       return Response(streamedResponse.statusCode, body: streamedResponse.stream, headers: responseHeaders);
+    } on BlockedTargetException catch (e) {
+      debugPrint('[HlsProxy] $e');
+      return Response.forbidden(e.toString());
     } catch (e) {
       debugPrint('[HlsProxy] Error: $e');
       return Response.internalServerError(body: 'HLS proxy error: $e');

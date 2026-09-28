@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../api/local_server_service.dart';
+import '../utils/network_safety.dart';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Models
@@ -238,9 +239,34 @@ class JellyfinService {
 
   // ─── HTTP Client ─────────────────────────────────────────────────────────
 
+  /// Server host names seen resolving only to local-network addresses
+  /// (e.g. split-DNS "jellyfin.mydomain.com" -> 192.168.x.x). These get the
+  /// same self-signed-certificate allowance as a private IP.
+  final Set<String> _lanHosts = {};
+  final Set<String> _checkedHosts = {};
+
+  Future<void> _rememberIfLan(String host) async {
+    final h = host.toLowerCase();
+    if (h.isEmpty || _checkedHosts.contains(h) || isLocalNetworkHost(h)) return;
+    _checkedHosts.add(h);
+    try {
+      final addrs =
+          await InternetAddress.lookup(h).timeout(const Duration(seconds: 3));
+      if (addrs.isNotEmpty && addrs.every(isPrivateAddress)) _lanHosts.add(h);
+    } catch (_) {
+      _checkedHosts.remove(h); // try again on the next request
+    }
+  }
+
   late final HttpClient _ioClient = () {
     final client = HttpClient();
-    client.badCertificateCallback = (cert, host, port) => true;
+    // Self-signed certificates are common on home servers, so accept an
+    // untrusted certificate only when the server is on the local network
+    // (private IP, localhost, Tailscale 100.x, or a LAN name like
+    // "nas.local"). Servers on public domains must present a valid
+    // certificate, so nobody can impersonate them to steal the login.
+    client.badCertificateCallback = (cert, host, port) =>
+        isLocalNetworkHost(host) || _lanHosts.contains(host.toLowerCase());
     client.connectionTimeout = const Duration(seconds: 30);
     client.idleTimeout = const Duration(seconds: 30);
     return client;
@@ -297,6 +323,7 @@ class JellyfinService {
     const maxRedirects = 5;
 
     for (var i = 0; i <= maxRedirects; i++) {
+      await _rememberIfLan(currentUri.host);
       final ioReq = await _ioClient.openUrl(method, currentUri).timeout(timeout);
       ioReq.followRedirects = false;
 

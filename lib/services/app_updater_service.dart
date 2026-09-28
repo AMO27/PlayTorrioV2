@@ -6,7 +6,11 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AppUpdaterService {
-  static const String githubRepo = 'ayman708-UX/PlayTorrioV2';
+  // Point at this fork's own releases. Pointing at the upstream repo would
+  // offer upstream builds as "updates" and silently replace this fork's
+  // fixes. If this fork has no GitHub Releases, the check simply finds no
+  // update.
+  static const String githubRepo = 'AMO27/PlayTorrioV2';
   static const String githubApiUrl = 'https://api.github.com/repos/$githubRepo/releases/latest';
   
   Future<UpdateInfo?> checkForUpdates() async {
@@ -25,6 +29,16 @@ class AppUpdaterService {
         if (_isNewerVersion(currentVersion, latestVersion)) {
           // Find the appropriate download URL based on platform
           String? downloadUrl;
+          String? sha256;
+          // GitHub publishes a "sha256:<hex>" digest for each release asset;
+          // the downloader checks the file against it.
+          String? digestOf(dynamic asset) {
+            final d = asset is Map ? asset['digest'] : null;
+            if (d is String && d.toLowerCase().startsWith('sha256:')) {
+              return d.substring(7).toLowerCase();
+            }
+            return null;
+          }
           final assets = data['assets'] as List;
           
           if (Platform.isWindows) {
@@ -34,6 +48,7 @@ class AppUpdaterService {
               orElse: () => null,
             );
             downloadUrl = asset?['browser_download_url'];
+            sha256 = digestOf(asset);
           } else if (Platform.isLinux) {
             final asset = assets.firstWhere(
               (a) => (a['name'] as String).toLowerCase().contains('linux') && 
@@ -42,6 +57,7 @@ class AppUpdaterService {
               orElse: () => null,
             );
             downloadUrl = asset?['browser_download_url'];
+            sha256 = digestOf(asset);
           } else if (Platform.isMacOS) {
             // For macOS, we'll just link to the releases page
             downloadUrl = data['html_url'];
@@ -51,6 +67,7 @@ class AppUpdaterService {
               orElse: () => null,
             );
             downloadUrl = asset?['browser_download_url'];
+            sha256 = digestOf(asset);
           } else if (Platform.isIOS) {
             // iOS can't auto-install — link to releases page
             downloadUrl = data['html_url'];
@@ -64,6 +81,7 @@ class AppUpdaterService {
             publishedAt: publishedAt,
             isMacOS: Platform.isMacOS,
             isIOS: Platform.isIOS,
+            sha256: sha256,
           );
         }
       }
@@ -104,6 +122,8 @@ class UpdateInfo {
   final DateTime publishedAt;
   final bool isMacOS;
   final bool isIOS;
+  /// Expected SHA-256 (lowercase hex) of the download, when GitHub provides it.
+  final String? sha256;
   
   UpdateInfo({
     required this.currentVersion,
@@ -113,5 +133,6 @@ class UpdateInfo {
     required this.publishedAt,
     required this.isMacOS,
     this.isIOS = false,
+    this.sha256,
   });
 }
