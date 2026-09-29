@@ -68,6 +68,15 @@ jobs:
           </plist>
           EOF
 
+      # libtorrent_flutter 1.9.9 broke streaming, music and torrents on iPhone:
+      # official PlayTorrio 1.4.0 (libtorrent_flutter 1.8.5) works, 1.4.1
+      # (1.9.9) doesn't, and that version bump is the only difference between
+      # them. Build iOS with 1.8.5; Windows keeps 1.9.9, which works there.
+      - name: Pin libtorrent_flutter 1.8.5 for iOS
+        run: |
+          sed -i '' 's/^  libtorrent_flutter: .*/  libtorrent_flutter: 1.8.5/' pubspec.yaml
+          grep -n "libtorrent_flutter:" pubspec.yaml
+
       - run: flutter pub get
 
       # ── Release build ────────────────────────────────────────────────────
