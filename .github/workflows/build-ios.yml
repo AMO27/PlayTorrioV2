@@ -4,13 +4,9 @@ name: Build iOS
 # (same steps as the iOS job in build.yml). Download the "PlayTorrio-iOS"
 # artifact when it finishes and sideload it (Sideloadly / AltStore).
 #
-# Runs when started manually, or when this file itself changes — not on
-# every code push, so it doesn't pile up extra builds.
+# Manual only: start it from the Actions tab ("Run workflow").
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/shutdown-music-comics]
-    paths: ['.github/workflows/build-ios.yml']
 
 env:
   FLUTTER_CHANNEL: stable
