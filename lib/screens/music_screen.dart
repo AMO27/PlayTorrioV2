@@ -10,6 +10,7 @@ import '../api/music_service.dart';
 import '../api/music_player_service.dart';
 import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
+import '../widgets/music_download_snackbar.dart';
 import '../utils/app_theme.dart';
 import 'music_player_screen.dart';
 
@@ -87,16 +88,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   /// since the "added to queue" snackbar only means it was accepted.
   void _onDownloadResult(DownloadResultEvent event) {
     if (!mounted) return;
-    final message = event.success
-        ? 'Downloaded: ${event.track.title}'
-        : 'Download failed: ${event.track.title}${event.error != null ? ' — ${event.error}' : ''}';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: event.success ? AppTheme.bgCard : Colors.red.shade900,
-      behavior: SnackBarBehavior.floating,
-      duration: Duration(seconds: event.success ? 4 : 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-    ));
+    // When the full-screen player is open on top, it shows the message
+    // itself; don't show it twice.
+    if (ModalRoute.of(context)?.isCurrent == false) return;
+    showMusicDownloadResult(ScaffoldMessenger.of(context), event);
   }
 
   @override
@@ -2090,14 +2085,13 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       await _storageService.removeDownloadedTrack(track.id);
                     } else {
                       final messenger = ScaffoldMessenger.of(context);
-                      final success = await _downloader.downloadTrack(track);
+                      await _downloader.downloadTrack(track);
                       if (mounted) {
-                        messenger.showSnackBar(SnackBar(
-                          content: Text(success ? 'Added to download queue...' : 'Already in download queue'),
-                          backgroundColor: AppTheme.bgCard,
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ));
+                        if (_downloader.isPending(track.id)) {
+                          showMusicDownloadProgress(messenger);
+                        } else {
+                          showMusicDownloadInfo(messenger, 'Already downloaded: ${track.title}');
+                        }
                       }
                     }
                   },

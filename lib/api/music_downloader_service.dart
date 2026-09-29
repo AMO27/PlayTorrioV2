@@ -20,6 +20,44 @@ class DownloadResultEvent {
   const DownloadResultEvent({required this.track, required this.success, this.error});
 }
 
+/// Live status of the download currently being worked on, for the progress
+/// snackbar. [totalBytes] is null when the server doesn't send a size.
+class MusicDownloadProgress {
+  final MusicTrack track;
+  final String stage; // e.g. "Finding song", "Downloading", "Saving"
+  final int receivedBytes;
+  final int? totalBytes;
+  final DateTime? downloadStartedAt;
+  final int queuedAfter; // how many more songs are waiting
+
+  const MusicDownloadProgress({
+    required this.track,
+    required this.stage,
+    this.receivedBytes = 0,
+    this.totalBytes,
+    this.downloadStartedAt,
+    this.queuedAfter = 0,
+  });
+
+  double? get fraction {
+    final t = totalBytes;
+    if (t == null || t <= 0) return null;
+    return (receivedBytes / t).clamp(0.0, 1.0);
+  }
+
+  /// Estimated time left, once enough has been downloaded to judge speed.
+  Duration? get timeLeft {
+    final t = totalBytes;
+    final start = downloadStartedAt;
+    if (t == null || start == null || receivedBytes <= 0) return null;
+    final elapsedMs = DateTime.now().difference(start).inMilliseconds;
+    if (elapsedMs < 500) return null;
+    final bytesPerMs = receivedBytes / elapsedMs;
+    if (bytesPerMs <= 0) return null;
+    return Duration(milliseconds: ((t - receivedBytes) / bytesPerMs).round());
+  }
+}
+
 class MusicDownloaderService {
   static final MusicDownloaderService _instance = MusicDownloaderService._internal();
   factory MusicDownloaderService() => _instance;
@@ -41,6 +79,24 @@ class MusicDownloaderService {
   /// show a snackbar. The initial "queued" response from [downloadTrack]
   /// only tells you it was accepted, not whether it ultimately succeeded.
   Stream<DownloadResultEvent> get onResult => _resultsController.stream;
+
+  /// Progress of the song currently downloading (null when idle).
+  final ValueNotifier<MusicDownloadProgress?> progress =
+      ValueNotifier<MusicDownloadProgress?>(null);
+
+  /// True while [trackId] is queued or downloading.
+  bool isPending(String trackId) => _activeDownloadIds.contains(trackId);
+
+  /// True while anything is queued or downloading.
+  bool get hasPending => _activeDownloadIds.isNotEmpty;
+
+  void _setStage(MusicTrack track, String stage) {
+    progress.value = MusicDownloadProgress(
+      track: track,
+      stage: stage,
+      queuedAfter: _queue.length,
+    );
+  }
 
   Future<bool> downloadTrack(MusicTrack track) async {
     // 1. Check if already downloaded
@@ -72,22 +128,26 @@ class MusicDownloaderService {
   Future<void> _processQueue() async {
     if (_queue.isEmpty) {
       _isProcessing = false;
+      progress.value = null;
       return;
     }
 
     _isProcessing = true;
     final track = _queue.removeFirst();
 
+    DownloadResultEvent result;
     try {
       await _executeDownload(track);
-      _resultsController.add(DownloadResultEvent(track: track, success: true));
+      result = DownloadResultEvent(track: track, success: true);
     } catch (e) {
       debugPrint('[Downloader] Error processing ${track.title}: $e');
-      _resultsController.add(DownloadResultEvent(track: track, success: false, error: e.toString()));
-    } finally {
-      _activeDownloadIds.remove(track.id);
-      _processQueue(); // Process next in queue
+      result = DownloadResultEvent(track: track, success: false, error: e.toString());
     }
+    // Mark it done before announcing, so listeners see an accurate
+    // "anything still pending?" state.
+    _activeDownloadIds.remove(track.id);
+    _resultsController.add(result);
+    _processQueue(); // Process next in queue
   }
 
   Future<void> _executeDownload(MusicTrack track) async {
@@ -100,6 +160,7 @@ class MusicDownloaderService {
       }
 
       // 2. Get the video ID
+      _setStage(track, 'Finding song');
       final videoId = await _musicService.getYoutubeVideoId(track.title, track.artist);
       if (videoId == null) throw Exception('No YouTube match found');
 
@@ -148,10 +209,48 @@ class MusicDownloaderService {
         if (httpResponse.statusCode != 200 && httpResponse.statusCode != 206) {
           throw Exception('Stream request failed with status ${httpResponse.statusCode}');
         }
+        final total = httpResponse.contentLength;
+        final startedAt = DateTime.now();
+        var received = 0;
+        var lastReport = DateTime.fromMillisecondsSinceEpoch(0);
+        progress.value = MusicDownloadProgress(
+          track: track,
+          stage: 'Downloading',
+          totalBytes: total,
+          downloadStartedAt: startedAt,
+          queuedAfter: _queue.length,
+        );
         final fileStream = file.openWrite();
-        await httpResponse.stream.pipe(fileStream);
-        await fileStream.flush();
-        await fileStream.close();
+        try {
+          await for (final chunk in httpResponse.stream) {
+            fileStream.add(chunk);
+            received += chunk.length;
+            final now = DateTime.now();
+            // Update the UI a few times a second, not on every chunk.
+            if (now.difference(lastReport).inMilliseconds >= 250) {
+              lastReport = now;
+              progress.value = MusicDownloadProgress(
+                track: track,
+                stage: 'Downloading',
+                receivedBytes: received,
+                totalBytes: total,
+                downloadStartedAt: startedAt,
+                queuedAfter: _queue.length,
+              );
+            }
+          }
+          await fileStream.flush();
+        } finally {
+          await fileStream.close();
+        }
+        progress.value = MusicDownloadProgress(
+          track: track,
+          stage: 'Saving',
+          receivedBytes: received,
+          totalBytes: total ?? received,
+          downloadStartedAt: startedAt,
+          queuedAfter: _queue.length,
+        );
       } finally {
         client.close();
       }

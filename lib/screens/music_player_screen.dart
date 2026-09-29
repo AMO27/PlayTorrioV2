@@ -8,6 +8,7 @@ import '../api/music_player_service.dart';
 import '../api/music_service.dart';
 import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
+import '../widgets/music_download_snackbar.dart';
 import '../api/lyrics_service.dart';
 import '../utils/app_theme.dart';
 
@@ -47,16 +48,8 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
     )..repeat(reverse: true);
     _downloadResultSub = _downloader.onResult.listen((event) {
       if (!mounted) return;
-      final message = event.success
-          ? 'Downloaded: ${event.track.title}'
-          : 'Download failed: ${event.track.title}${event.error != null ? ' — ${event.error}' : ''}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(message),
-        backgroundColor: event.success ? const Color(0xFF1A1030) : Colors.red.shade900,
-        behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: event.success ? 4 : 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
+      if (ModalRoute.of(context)?.isCurrent == false) return;
+      showMusicDownloadResult(ScaffoldMessenger.of(context), event);
     });
   }
 
@@ -164,14 +157,13 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
                 icon: Icon(Icons.download_rounded, color: Colors.white.withValues(alpha: 0.6), size: 22),
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  final success = await _downloader.downloadTrack(track);
+                  await _downloader.downloadTrack(track);
                   if (mounted) {
-                    messenger.showSnackBar(SnackBar(
-                      content: Text(success ? 'Added to download queue...' : 'Already in download queue'),
-                      backgroundColor: const Color(0xFF1A1030),
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ));
+                    if (_downloader.isPending(track.id)) {
+                      showMusicDownloadProgress(messenger);
+                    } else {
+                      showMusicDownloadInfo(messenger, 'Already downloaded: ${track.title}');
+                    }
                   }
                 },
               );
