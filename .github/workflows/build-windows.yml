@@ -3,12 +3,9 @@ name: Build Windows
 # Builds PlayTorrio for Windows on GitHub's servers — no local Flutter needed.
 # Run it from the repo's Actions tab ("Run workflow"), then download the
 # "PlayTorrio-windows" artifact when it finishes.
+# Manual only: start it from the Actions tab ("Run workflow").
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/shutdown-music-comics]
-    # Don't rebuild Windows for docs-only or workflow-only changes.
-    paths-ignore: ['**.md', '.github/workflows/**']
 
 jobs:
   build:
