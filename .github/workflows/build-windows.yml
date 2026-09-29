@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
   push:
     branches: [fix/shutdown-music-comics]
+    # Don't rebuild Windows for docs-only or workflow-only changes.
+    paths-ignore: ['**.md', '.github/workflows/**']
 
 jobs:
   build:

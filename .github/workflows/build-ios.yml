@@ -1,0 +1,92 @@
+name: Build iOS
+
+# Builds an unsigned, sideloadable PlayTorrio IPA on GitHub's macOS runners
+# (same steps as the iOS job in build.yml). Download the "PlayTorrio-iOS"
+# artifact when it finishes and sideload it (Sideloadly / AltStore).
+#
+# Runs when started manually, or when this file itself changes — not on
+# every code push, so it doesn't pile up extra builds.
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/shutdown-music-comics]
+    paths: ['.github/workflows/build-ios.yml']
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  ios:
+    name:  iOS (IPA)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Generate iOS platform files
+        run: |
+          if [ ! -d "ios" ]; then
+            flutter create --platforms=ios .
+          fi
+
+          # ── Set bundle ID & display name ──
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.playtorrio.app" \
+            ios/Runner/Info.plist 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.playtorrio.app" \
+            ios/Runner/Info.plist
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName PlayTorrio" \
+            ios/Runner/Info.plist 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string PlayTorrio" \
+            ios/Runner/Info.plist
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName PlayTorrio" \
+            ios/Runner/Info.plist 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleName string PlayTorrio" \
+            ios/Runner/Info.plist
+
+          # ── Allow localhost networking (libtorrent local HTTP server) ──
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" \
+            ios/Runner/Info.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsLocalNetworking true" \
+            ios/Runner/Info.plist 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" \
+            ios/Runner/Info.plist
+
+          # ── Network entitlements for libtorrent_flutter ──
+          cat > ios/Runner/Runner.entitlements << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          	<key>com.apple.security.network.client</key>
+          	<true/>
+          </dict>
+          </plist>
+          EOF
+
+      - run: flutter pub get
+
+      # ── Release build ────────────────────────────────────────────────────
+      - run: >
+          flutter build ios --release --no-codesign
+          --dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}
+          --dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}
+          --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
+          --dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}
+
+      - name: Package as IPA
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -ry ../../../PlayTorrio-iOS.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlayTorrio-iOS
+          path: PlayTorrio-iOS.ipa
+
