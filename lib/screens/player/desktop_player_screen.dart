@@ -448,6 +448,12 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   late final Player _player;
   late final VideoController _controller;
   bool _disposed = false;
+
+  /// Bumped each time a player screen opens, so a closing player's delayed
+  /// cleanup can tell whether a newer player has started since.
+  static int _generation = 0;
+  static String? _currentTorrentKey;
+  late final int _myGeneration;
   bool _historySaved = false;
   bool _hasError = false;
   String _errorMessage = '';
@@ -541,6 +547,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   @override
   void initState() {
     super.initState();
+    _myGeneration = ++_generation;
+    _currentTorrentKey = widget.magnetLink ?? widget.mediaPath;
     
     // ── Provider initialization ──────────────────────────────────────────
     _currentProvider = widget.activeProvider;
@@ -664,17 +672,40 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _hlsQualitiesNotifier.dispose();
     _volumeNotifier.dispose();
 
-    _player.dispose();
-
-    // Remove torrent from engine on player exit (use magnetLink for hash,
-    // fall back to mediaPath which may be a stream URL).
+    // Shut the player down FIRST and only then remove the torrent stream /
+    // 111477 proxy it was reading from. Pulling the stream out from under a
+    // still-running mpv is what made closing a movie freeze or crash.
+    final player = _player;
     final torrentId = widget.magnetLink ?? widget.mediaPath;
-    TorrentStreamService().removeTorrent(torrentId);
+    final myGen = _myGeneration;
+    unawaited(() async {
+      Future<void> step(Future<void> Function() f) async {
+        try {
+          await f().timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      }
 
-    // Tear down the 111477 proxy and delete its on-disk cache.
-    if (site111477_proxy.is111477ProxyRunning) {
-      site111477_proxy.stop111477Proxy();
-    }
+      await step(player.pause);
+      await step(player.stop);
+      await step(player.dispose);
+
+      final newerPlayerOpened = _generation != myGen;
+
+      // Remove torrent from engine (magnetLink for hash, fall back to
+      // mediaPath). Skip if a newer player is already streaming the same
+      // torrent, e.g. the user reopened the same movie right away.
+      if (!(newerPlayerOpened && _currentTorrentKey == torrentId)) {
+        try {
+          TorrentStreamService().removeTorrent(torrentId);
+        } catch (_) {}
+      }
+
+      // Tear down the 111477 proxy and its on-disk cache, unless a newer
+      // player has taken it over.
+      if (!newerPlayerOpened && site111477_proxy.is111477ProxyRunning) {
+        await step(site111477_proxy.stop111477Proxy);
+      }
+    }());
 
     super.dispose();
   }
