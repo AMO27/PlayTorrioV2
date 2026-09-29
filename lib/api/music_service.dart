@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../services/youtube_audio_extractor.dart';
+import '../services/youtube_mirror_service.dart';
+import '../services/webview_ejs_solver.dart';
 
 class _CachedUrl {
   final String url;
@@ -114,6 +116,36 @@ class MusicAlbum {
 
 class MusicService {
   final _yt = YoutubeExplode();
+
+  // A second YoutubeExplode that can solve YouTube's JS challenges using the
+  // device's own JS engine (hidden WebView). This unlocks the Safari/TV
+  // clients on phones, where yt-dlp isn't available. Created on first use.
+  Future<YoutubeExplode?>? _solverYtFuture;
+  DateTime? _solverFailedAt;
+
+  Future<YoutubeExplode?> _solverYt() {
+    // Windows has yt-dlp; Linux has no headless WebView.
+    if (!(Platform.isIOS || Platform.isAndroid || Platform.isMacOS)) {
+      return Future.value(null);
+    }
+    // After a failure, wait a bit before trying to start it again.
+    if (_solverFailedAt != null &&
+        DateTime.now().difference(_solverFailedAt!) < const Duration(minutes: 5)) {
+      return Future.value(null);
+    }
+    return _solverYtFuture ??= () async {
+      try {
+        final solver = await WebViewEJSSolver.init();
+        debugPrint('MusicService: JS challenge solver ready');
+        return YoutubeExplode(jsSolver: solver);
+      } catch (e) {
+        debugPrint('MusicService: JS challenge solver unavailable: $e');
+        _solverFailedAt = DateTime.now();
+        _solverYtFuture = null;
+        return null;
+      }
+    }();
+  }
 
   // Caches for fast playback
   final Map<String, String> _videoIdCache = {};
@@ -254,31 +286,60 @@ class MusicService {
       return _videoIdCache[cacheKey];
     }
 
-    // Fast path: YouTube results-page HTML + regex (ported from PlayTorrio TV).
+    // Warm up the phone-side JS challenge solver while we search, so it's
+    // ready by the time the stream URL is needed.
+    unawaited(_solverYt());
+
+    // Run the searches side by side; first match wins. The public-mirror
+    // search starts a few seconds later, only if the others are slow/blocked.
+    var found = false;
+    final id = await _firstNonNullUrl([
+      _fastSearchVideoId(title, artist),
+      _librarySearchVideoId(title, artist),
+      Future<String?>.delayed(const Duration(seconds: 3), () async {
+        if (found) return null;
+        try {
+          final mirrorId =
+              await YoutubeMirrorService.instance.searchVideoId(title, artist);
+          if (mirrorId != null) debugPrint('MusicService: videoId via public mirror search');
+          return mirrorId;
+        } catch (e) {
+          debugPrint('MusicService: Mirror search failed: $e');
+          return null;
+        }
+      }),
+    ]);
+    found = true;
+    if (id != null) _videoIdCache[cacheKey] = id;
+    return id;
+  }
+
+  // Fast path: YouTube results-page HTML + regex (ported from PlayTorrio TV).
+  Future<String?> _fastSearchVideoId(String title, String artist) async {
     try {
       final fastId = await YoutubeAudioExtractor.instance
           .searchVideoId(title, artist);
       if (fastId != null) {
-        _videoIdCache[cacheKey] = fastId;
         debugPrint('MusicService: Fast videoId match for "$title"');
-        return fastId;
       }
+      return fastId;
     } catch (e) {
       debugPrint('MusicService: Fast search failed: $e');
+      return null;
     }
+  }
 
-    // Fallback: youtube_explode_dart full search.
+  // youtube_explode_dart full search.
+  Future<String?> _librarySearchVideoId(String title, String artist) async {
     try {
       final searchQuery = '$title - $artist lyrics';
       final searchList = await _yt.search.search(searchQuery);
       if (searchList.isNotEmpty) {
         for (final video in searchList) {
           if (video.duration != null && video.duration!.inSeconds > 60) {
-            _videoIdCache[cacheKey] = video.id.value;
             return video.id.value;
           }
         }
-        _videoIdCache[cacheKey] = searchList.first.id.value;
         return searchList.first.id.value;
       }
     } catch (e) {
@@ -340,46 +401,115 @@ class MusicService {
       return dlpUrl;
     }
 
-    // Fast path: direct InnerTube call (ported from PlayTorrio TV). Kept as
-    // a fallback for platforms without yt-dlp (yt-dlp is Windows-only).
-    if (!skipFastPath) try {
-      final fastUrl =
-          await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
+    // Everything below runs side by side and the first working URL wins,
+    // so a blocked method can't eat the player's whole time budget:
+    //  1. the fast InnerTube extractor (ported from PlayTorrio TV),
+    //  2. youtube_explode_dart with several YouTube clients (plus the JS
+    //     challenge solver on phones),
+    //  3. public Invidious/Piped mirrors — started a few seconds later so
+    //     they're only used when the direct methods are slow or blocked.
+    // On a retry (the first URL didn't play) skip the methods that just
+    // produced a dud and go to the mirrors right away.
+    var resolved = false;
+    final url = await _firstNonNullUrl([
+      if (!skipFastPath) _fastExtractorUrl(videoId),
+      _libraryStreamUrl(videoId, solverOnly: skipFastPath),
+      Future<String?>.delayed(Duration(seconds: skipFastPath ? 0 : 4), () async {
+        if (resolved) return null;
+        return _mirrorStreamUrl(videoId);
+      }),
+    ]);
+    resolved = true;
+
+    if (url != null) {
+      _streamUrlCache[videoId] = _CachedUrl(url);
+      return url;
+    }
+    debugPrint('MusicService: All methods failed for $videoId');
+    return null;
+  }
+
+  Future<String?> _fastExtractorUrl(String videoId) async {
+    try {
+      final fastUrl = await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
       if (fastUrl != null) {
-        _streamUrlCache[videoId] = _CachedUrl(fastUrl);
         debugPrint('MusicService: Got stream URL via fast extractor');
-        return fastUrl;
       }
+      return fastUrl;
     } catch (e) {
       debugPrint('MusicService: Fast extractor failed: $e');
+      return null;
     }
+  }
 
-    // Fallback: youtube_explode_dart.
-    final clientSets = [
-      [YoutubeApiClient.androidVr],
-      [YoutubeApiClient.tv],
-    ];
+  Future<String?> _libraryStreamUrl(String videoId, {bool solverOnly = false}) async {
+    // Start the JS challenge solver in the background (first use takes a
+    // moment) while trying the clients that don't need it.
+    final solverFuture = _solverYt();
 
-    for (final clients in clientSets) {
+    Future<String?> tryClient(YoutubeExplode yt, YoutubeApiClient client) async {
       try {
-        final manifest = await _yt.videos.streamsClient.getManifest(
-          videoId,
-          ytClients: clients,
-        );
+        final manifest = await yt.videos.streamsClient
+            .getManifest(videoId, ytClients: [client])
+            .timeout(const Duration(seconds: 7));
         final audioStreams = manifest.audioOnly.toList();
-        if (audioStreams.isEmpty) continue;
+        if (audioStreams.isEmpty) return null;
         audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-        final url = audioStreams.first.url.toString();
-        _streamUrlCache[videoId] = _CachedUrl(url);
-        debugPrint('MusicService: Got stream URL via ${clients.first}');
-        return url;
+        debugPrint('MusicService: Got stream URL via $client');
+        return audioStreams.first.url.toString();
       } catch (e) {
-        debugPrint('MusicService: ${clients.first} failed: $e');
+        debugPrint('MusicService: $client failed: $e');
+        return null;
       }
     }
 
-    debugPrint('MusicService: All clients failed for $videoId');
-    return null;
+    // Newer client that avoids YouTube's extra proof checks (lib 3.1+),
+    // the VR client that worked before, and the iPhone client — all at once.
+    if (!solverOnly) {
+      final url = await _firstNonNullUrl([
+        tryClient(_yt, YoutubeApiClient.androidSdkless),
+        tryClient(_yt, YoutubeApiClient.androidVr),
+        tryClient(_yt, YoutubeApiClient.ios),
+      ]);
+      if (url != null) return url;
+    }
+
+    // Safari and TV need the JS challenge solver (phones only).
+    final solverYt = await solverFuture;
+    if (solverYt == null) return null;
+    return _firstNonNullUrl([
+      tryClient(solverYt, YoutubeApiClient.safari),
+      tryClient(solverYt, YoutubeApiClient.tv),
+    ]);
+  }
+
+  Future<String?> _mirrorStreamUrl(String videoId) async {
+    try {
+      final url = await YoutubeMirrorService.instance.audioUrl(videoId);
+      if (url != null) debugPrint('MusicService: Got stream URL via public mirror');
+      return url;
+    } catch (e) {
+      debugPrint('MusicService: Mirror lookup failed: $e');
+      return null;
+    }
+  }
+
+  /// Completes with the first non-null URL, or null once all have finished.
+  static Future<String?> _firstNonNullUrl(List<Future<String?>> futures) {
+    if (futures.isEmpty) return Future.value(null);
+    final completer = Completer<String?>();
+    var remaining = futures.length;
+    for (final f in futures) {
+      f.then((value) {
+        if (value != null && value.isNotEmpty && !completer.isCompleted) {
+          completer.complete(value);
+        }
+      }, onError: (_) {}).whenComplete(() {
+        remaining--;
+        if (remaining == 0 && !completer.isCompleted) completer.complete(null);
+      });
+    }
+    return completer.future;
   }
 
   Future<StreamManifest?> getYoutubeManifest(String videoId) async {

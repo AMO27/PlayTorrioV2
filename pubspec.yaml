@@ -36,7 +36,7 @@ dependencies:
   shelf_proxy: ^1.0.4 
   html: ^0.15.4
   path_provider: ^2.1.5
-  youtube_explode_dart: ^3.0.5
+  youtube_explode_dart: ^3.1.0
   logging: ^1.2.0
   audio_service: ^0.18.17
   audio_session: ^0.1.25
