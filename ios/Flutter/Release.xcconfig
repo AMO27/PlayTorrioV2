@@ -1,1 +1,7 @@
 #include "Generated.xcconfig"
+
+// libtorrent_flutter is statically linked and its C functions are looked up
+// by name at runtime (dart:ffi DynamicLibrary.process()). Stripping all
+// symbols in release builds would make those lookups fail, so keep global
+// symbols.
+STRIP_STYLE = non-global

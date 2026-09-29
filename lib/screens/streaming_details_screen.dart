@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -487,7 +488,9 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
         : provider['movie'](_movie.id.toString());
     debugPrint('[StreamExtractor] Trying ${provider['name']} source: $url');
     final result =
-        await _extractor.extract(url, timeout: const Duration(seconds: 5));
+        // Phones load embed pages slower than desktops; give them a bit longer.
+        await _extractor.extract(url,
+            timeout: Duration(seconds: (Platform.isIOS || Platform.isAndroid) ? 9 : 5));
     if (_extractionCancelled || result == null) return false;
     if (!mounted) return false;
     pushPlayer(

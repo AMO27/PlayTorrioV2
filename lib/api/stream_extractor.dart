@@ -381,8 +381,24 @@ class StreamExtractor {
       
       const log = (type, url) => {
         if (!url || typeof url !== 'string' || url.startsWith('data:')) return;
-        console.log('PT_EXTRACT: [' + type + '] ' + url + ' | FRAME: ' + window.location.href);
+        const msg = 'PT_EXTRACT: [' + type + '] ' + url + ' | FRAME: ' + window.location.href;
+        console.log(msg);
+        // On iOS only the top page's console reaches the app, and the video
+        // usually loads inside an embed iframe. Relay finds up to the top
+        // page, which logs them where the app can see them.
+        try {
+          if (window.top !== window) window.top.postMessage({ __ptExtract: msg }, '*');
+        } catch (e) {}
       };
+
+      if (window.top === window) {
+        window.addEventListener('message', (e) => {
+          try {
+            const m = e.data && e.data.__ptExtract;
+            if (typeof m === 'string' && m.indexOf('PT_EXTRACT:') === 0) console.log(m);
+          } catch (err) {}
+        });
+      }
 
       console.log('PT_LOG: Sniffer Active on ' + window.location.href);
 

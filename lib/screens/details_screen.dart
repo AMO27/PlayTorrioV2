@@ -1587,7 +1587,13 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
           stremioId: stremioId,
           stremioAddonBaseUrl: stremioAddonBaseUrl)));
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to resolve stream.')));
+        final reason = (useDebrid && debridService != 'None')
+            ? '$debridService returned no playable file'
+            : (TorrentStreamService().lastError ?? 'unknown error');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("Couldn't start this torrent: $reason"),
+          duration: const Duration(seconds: 8),
+        ));
       }
     }
   }
@@ -1741,6 +1747,16 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
         fileIndex: resolvedFileIndex,
         startPosition: startPosition,
         activeProvider: 'torrent')));
+    } else {
+      // Previously this closed the loading screen and did nothing, so a
+      // failure looked like "nothing happens". Say what went wrong.
+      final reason = (useDebrid && debridService != 'None')
+          ? '$debridService returned no playable file'
+          : (TorrentStreamService().lastError ?? 'unknown error');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text("Couldn't start this torrent: $reason"),
+        duration: const Duration(seconds: 8),
+      ));
     }
   }
 

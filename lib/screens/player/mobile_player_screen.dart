@@ -1022,6 +1022,25 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     }
   }
 
+  DateTime _lastSourceErrorShown = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Shows why a source failed before the player moves to the next one, so
+  /// "it keeps loading back and forth" comes with an actual reason.
+  void _showSourceError(String err) {
+    if (!mounted) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSourceErrorShown) < const Duration(seconds: 2)) return;
+    _lastSourceErrorShown = now;
+    final shortErr = err.length > 160 ? '${err.substring(0, 160)}…' : err;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('Source ${_currentFallbackSourceIndex + 1} failed: $shortErr'),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
   Future<void> _autoFallbackToNextProvider() async {
     if (widget.providers == null || widget.providers!.isEmpty) {
       setState(() {
@@ -1354,6 +1373,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           return;
         }
         debugPrint('[Player] Fatal error detected on source $_currentFallbackSourceIndex, progressing fallback...');
+        _showSourceError(err);
         _currentFallbackSourceIndex++;
         _initPlayback();
       }

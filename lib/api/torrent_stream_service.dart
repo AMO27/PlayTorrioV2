@@ -52,6 +52,11 @@ class TorrentStreamService {
   EngineState _state = EngineState.stopped;
   EngineState get state => _state;
 
+  /// Plain-English reason the last [streamTorrent] call failed, so the UI can
+  /// show it instead of silently closing the loading screen.
+  String? lastError;
+  String? _startError;
+
   void Function(EngineState state)? onStateChanged;
   void Function(String line)? onLogLine;
 
@@ -90,11 +95,12 @@ class TorrentStreamService {
     }
 
     _setState(EngineState.starting);
+    _startError = null;
     try {
       await LibtorrentFlutter.init(
         fetchTrackers: true,
         pollInterval: const Duration(milliseconds: 200),
-      );
+      ).timeout(const Duration(seconds: 20));
 
       try {
         final engine = LibtorrentFlutter.instance;
@@ -119,7 +125,10 @@ class TorrentStreamService {
       return true;
     } catch (e, st) {
       _log('Failed to start engine: $e\n$st');
-      _setState(EngineState.error);
+      _startError = e is TimeoutException
+          ? 'the torrent engine took too long to start'
+          : 'the torrent engine failed to start ($e)';
+      _setState(EngineState.error); // start() retries from this state
       return false;
     }
   }
@@ -159,10 +168,12 @@ class TorrentStreamService {
     int? episode,
     int? fileIdx,
   }) async {
+    lastError = null;
     if (_state != EngineState.ready) {
       final started = await start();
       if (!started) {
         _log('Cannot stream: engine failed to start.');
+        lastError = _startError ?? 'the torrent engine failed to start';
         return null;
       }
     }
@@ -201,6 +212,9 @@ class TorrentStreamService {
       final files = await _waitForMetadata(torrentId);
       if (files == null || files.isEmpty) {
         _log('No files found in torrent');
+        lastError = files == null
+            ? "no peers responded within 30 seconds. The torrent may be dead, or torrent traffic may be blocked on this network"
+            : 'the torrent has no files';
         return null;
       }
 
@@ -208,6 +222,7 @@ class TorrentStreamService {
       final selectedIndex = _selectFile(files, season: season, episode: episode, preferredIdx: fileIdx);
       if (selectedIndex == null) {
         _log('No suitable video file found');
+        lastError = 'no playable video file in this torrent';
         return null;
       }
 
@@ -232,6 +247,7 @@ class TorrentStreamService {
       return streamInfo.url;
     } catch (e) {
       _log('streamTorrent error: $e');
+      lastError = 'torrent error: $e';
       return null;
     }
   }
