@@ -181,6 +181,11 @@ class MusicDownloaderService {
           final appDir = await getExternalStorageDirectory();
           dir = Directory('${appDir!.path}/Music');
         }
+      } else if (Platform.isIOS) {
+        // iOS has no shared Downloads folder; the app's Documents folder
+        // shows up in the Files app (On My iPhone > PlayTorrio).
+        final docs = await getApplicationDocumentsDirectory();
+        dir = Directory('${docs.path}/PlayTorrio Music');
       } else {
         final downloads = await getDownloadsDirectory();
         dir = Directory('${downloads!.path}/PlayTorrio Music');
