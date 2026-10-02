@@ -192,6 +192,7 @@ class MusicPlayerService {
           try {
             await _player.open(Media(track.localPath!));
             debugPrint('MusicPlayerService: open() returned for local file');
+            _consecutiveFailures = 0;
           } catch (e, st) {
             debugPrint('MusicPlayerService: open() THREW for local file: $e\n$st');
             rethrow;
@@ -221,6 +222,7 @@ class MusicPlayerService {
       // 3. Stream URL, then VERIFY it really plays. A URL that mpv can't fetch
       // leaves the player "buffering" forever, so if no audio starts we retry
       // once with the fallback extractor, then report a clear error.
+      var gotLink = false;
       for (var attempt = 0; attempt < 2; attempt++) {
         final streamUrl = await _musicService
             .getYoutubeStreamUrl(videoId, skipFastPath: attempt > 0)
@@ -233,20 +235,26 @@ class MusicPlayerService {
           debugPrint('MusicPlayerService: no stream URL on attempt ${attempt + 1}');
           continue;
         }
+        gotLink = true;
         final preview = streamUrl.length > 120 ? '${streamUrl.substring(0, 120)}…' : streamUrl;
         debugPrint('MusicPlayerService: streamUrl=$preview');
 
         final started = await _openAndVerify(streamUrl, generation);
         if (_playGeneration != generation) return;
         if (started) {
+          _consecutiveFailures = 0;
           _prefetchNext();
           return;
         }
         debugPrint('MusicPlayerService: playback did not start on attempt ${attempt + 1}');
         _musicService.forgetStreamUrl(videoId);
       }
+      final why = _musicService.lastFailureSummary;
       _failPlayback(generation,
-          "Couldn't start playback — YouTube didn't return a stream that plays. Try another song, or try again later.");
+          (gotLink
+              ? "Couldn't start playback — YouTube gave a link, but it wouldn't play (link blocked for this player)."
+              : "Couldn't start playback — YouTube didn't give any audio link.")
+          + (why != null ? '\n$why' : ''));
 
     } catch (e, st) {
       debugPrint('MusicPlayerService: Error playing track: $e\n$st');
@@ -278,10 +286,31 @@ class MusicPlayerService {
   void _failPlayback(int generation, String message) {
     if (_playGeneration != generation) return; // a newer track took over
     debugPrint('MusicPlayerService: FAILED — $message');
-    playbackError.value = message;
     isBuffering.value = false;
     _player.stop().catchError((_) {});
+
+    // In an album / playlist / saved songs, skip to the next song instead of
+    // stopping. Stop only once every song in a row has failed, so a total
+    // outage can't loop forever.
+    final list = playlist.value;
+    _consecutiveFailures++;
+    if (list.length > 1 && _consecutiveFailures < list.length) {
+      final title = currentTrack.value?.title ?? 'song';
+      playbackError.value = "Skipped \"$title\" — couldn't play it.\n$message";
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (_playGeneration == generation && !_disposed) next();
+      });
+      return;
+    }
+    if (list.length > 1) {
+      message = "None of the songs in this list could be played.\n$message";
+    }
+    _consecutiveFailures = 0;
+    playbackError.value = message;
   }
+
+  /// Songs that failed back-to-back while auto-skipping; reset on success.
+  int _consecutiveFailures = 0;
 
   void _fetchLyricsForTrack(MusicTrack track) async {
     try {

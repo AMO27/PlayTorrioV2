@@ -79,8 +79,12 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 6),
+        // Explicit colors: the default snackbar text was invisible on some
+        // themes (the old "empty snackbar" problem).
+        backgroundColor: Colors.red.shade800,
+        behavior: SnackBarBehavior.floating,
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        duration: const Duration(seconds: 12),
       ));
   }
 

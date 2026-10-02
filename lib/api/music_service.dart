@@ -122,6 +122,20 @@ class MusicService {
   // clients on phones, where yt-dlp isn't available. Created on first use.
   Future<YoutubeExplode?>? _solverYtFuture;
   DateTime? _solverFailedAt;
+  String? _solverError;
+
+  // Why each method failed on the last stream lookup, so the player can show
+  // a useful message instead of a generic "didn't work".
+  final List<String> _failures = [];
+  String? get lastFailureSummary =>
+      _failures.isEmpty ? null : _failures.join('\n');
+
+  void _noteFailure(String method, Object reason) {
+    var r = reason.toString().split('\n').first.trim();
+    r = r.replaceFirst(RegExp(r'^(Exception|YoutubeExplodeException|VideoUnplayableException|ClientException)[:\s]*'), '');
+    if (r.length > 90) r = '${r.substring(0, 90)}…';
+    _failures.add('• $method: $r');
+  }
 
   Future<YoutubeExplode?> _solverYt() {
     // Windows has yt-dlp; Linux has no headless WebView.
@@ -140,6 +154,7 @@ class MusicService {
         return YoutubeExplode(jsSolver: solver);
       } catch (e) {
         debugPrint('MusicService: JS challenge solver unavailable: $e');
+        _solverError = e.toString();
         _solverFailedAt = DateTime.now();
         _solverYtFuture = null;
         return null;
@@ -410,6 +425,7 @@ class MusicService {
     //     they're only used when the direct methods are slow or blocked.
     // On a retry (the first URL didn't play) skip the methods that just
     // produced a dud and go to the mirrors right away.
+    if (!skipFastPath) _failures.clear(); // keep first-try reasons on the retry
     var resolved = false;
     final url = await _firstNonNullUrl([
       if (!skipFastPath) _fastExtractorUrl(videoId),
@@ -434,10 +450,13 @@ class MusicService {
       final fastUrl = await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
       if (fastUrl != null) {
         debugPrint('MusicService: Got stream URL via fast extractor');
+      } else {
+        _noteFailure('Built-in extractor', 'no audio returned');
       }
       return fastUrl;
     } catch (e) {
       debugPrint('MusicService: Fast extractor failed: $e');
+      _noteFailure('Built-in extractor', e);
       return null;
     }
   }
@@ -447,18 +466,22 @@ class MusicService {
     // moment) while trying the clients that don't need it.
     final solverFuture = _solverYt();
 
-    Future<String?> tryClient(YoutubeExplode yt, YoutubeApiClient client) async {
+    Future<String?> tryClient(YoutubeExplode yt, YoutubeApiClient client, String name) async {
       try {
         final manifest = await yt.videos.streamsClient
             .getManifest(videoId, ytClients: [client])
             .timeout(const Duration(seconds: 7));
         final audioStreams = manifest.audioOnly.toList();
-        if (audioStreams.isEmpty) return null;
+        if (audioStreams.isEmpty) {
+          _noteFailure(name, 'no audio streams');
+          return null;
+        }
         audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-        debugPrint('MusicService: Got stream URL via $client');
+        debugPrint('MusicService: Got stream URL via $name');
         return audioStreams.first.url.toString();
       } catch (e) {
-        debugPrint('MusicService: $client failed: $e');
+        debugPrint('MusicService: $name failed: $e');
+        _noteFailure(name, e is TimeoutException ? 'timed out' : e);
         return null;
       }
     }
@@ -467,29 +490,37 @@ class MusicService {
     // the VR client that worked before, and the iPhone client — all at once.
     if (!solverOnly) {
       final url = await _firstNonNullUrl([
-        tryClient(_yt, YoutubeApiClient.androidSdkless),
-        tryClient(_yt, YoutubeApiClient.androidVr),
-        tryClient(_yt, YoutubeApiClient.ios),
+        tryClient(_yt, YoutubeApiClient.androidSdkless, 'Android client'),
+        tryClient(_yt, YoutubeApiClient.androidVr, 'VR client'),
+        tryClient(_yt, YoutubeApiClient.ios, 'iPhone client'),
       ]);
       if (url != null) return url;
     }
 
     // Safari and TV need the JS challenge solver (phones only).
     final solverYt = await solverFuture;
-    if (solverYt == null) return null;
+    if (solverYt == null) {
+      if (_solverError != null) _noteFailure('Unblocking code', _solverError!);
+      return null;
+    }
     return _firstNonNullUrl([
-      tryClient(solverYt, YoutubeApiClient.safari),
-      tryClient(solverYt, YoutubeApiClient.tv),
+      tryClient(solverYt, YoutubeApiClient.safari, 'Safari client'),
+      tryClient(solverYt, YoutubeApiClient.tv, 'TV client'),
     ]);
   }
 
   Future<String?> _mirrorStreamUrl(String videoId) async {
     try {
       final url = await YoutubeMirrorService.instance.audioUrl(videoId);
-      if (url != null) debugPrint('MusicService: Got stream URL via public mirror');
+      if (url != null) {
+        debugPrint('MusicService: Got stream URL via public mirror');
+      } else {
+        _noteFailure('Public mirrors', 'no server could play it');
+      }
       return url;
     } catch (e) {
       debugPrint('MusicService: Mirror lookup failed: $e');
+      _noteFailure('Public mirrors', e);
       return null;
     }
   }

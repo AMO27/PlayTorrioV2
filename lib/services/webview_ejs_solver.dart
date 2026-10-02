@@ -28,7 +28,24 @@ class WebViewEJSSolver extends BaseEJSSolver {
       initialData: InAppWebViewInitialData(
         data: '<!DOCTYPE html><html><head></head><body></body></html>',
       ),
-      initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        // This page must never go anywhere. On iPhone, any navigation to a
+        // youtube.com link gets handed to the YouTube app.
+        useShouldOverrideUrlLoading: true,
+        javaScriptCanOpenWindowsAutomatically: false,
+        supportMultipleWindows: false,
+        allowsLinkPreview: false,
+      ),
+      shouldOverrideUrlLoading: (controller, action) async {
+        final scheme = action.request.url?.scheme ?? '';
+        if (scheme.isEmpty || scheme == 'about' || scheme == 'data') {
+          return NavigationActionPolicy.ALLOW;
+        }
+        debugPrint('WebViewEJSSolver: blocked navigation to ${action.request.url}');
+        return NavigationActionPolicy.CANCEL;
+      },
+      onCreateWindow: (controller, action) async => false,
       onLoadStop: (controller, _) {
         if (!ready.isCompleted) ready.complete(controller);
       },
