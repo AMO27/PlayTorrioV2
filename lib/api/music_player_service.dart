@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'music_service.dart';
 import 'music_storage_service.dart';
 import 'audio_handler.dart';
@@ -22,6 +23,78 @@ class MusicPlayerService {
   final LyricsService _lyricsService = LyricsService();
 
   Player get player => _player;
+
+  // ── Crossfade ─────────────────────────────────────────────────────────────
+  /// Seconds the end of one song fades out and the next fades in. 0 = off.
+  /// (A smooth fade-out / fade-in; the two songs don't overlap.)
+  final ValueNotifier<int> crossfadeSeconds = ValueNotifier<int>(0);
+  static const crossfadeOptions = [0, 3, 6, 9, 12];
+  static const _crossfadePrefKey = 'music_crossfade_seconds';
+  double _volume = 100;
+  bool _autoAdvance = false; // next track was started by the previous one ending
+  Timer? _fadeInTimer;
+
+  Future<void> setCrossfade(int seconds) async {
+    crossfadeSeconds.value = seconds;
+    if (seconds == 0) _setVolume(100);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_crossfadePrefKey, seconds);
+    } catch (_) {}
+  }
+
+  void cycleCrossfade() {
+    final i = crossfadeOptions.indexOf(crossfadeSeconds.value);
+    setCrossfade(crossfadeOptions[(i + 1) % crossfadeOptions.length]);
+  }
+
+  void _setVolume(double v) {
+    v = v.clamp(0, 100).toDouble();
+    if ((v - _volume).abs() < 1 && v != 0 && v != 100) return;
+    _volume = v;
+    _player.setVolume(v).catchError((_) {});
+  }
+
+  /// Lowers the volume over the last few seconds of a song.
+  void _applyFadeOut(Duration pos) {
+    final fade = crossfadeSeconds.value;
+    final total = duration.value;
+    if (fade == 0 || total <= Duration.zero || _isLoadingTrack) return;
+    if (_fadeInTimer?.isActive ?? false) return; // still fading in
+    final canContinue = playlist.value.length > 1 &&
+        _player.state.playlistMode != PlaylistMode.single;
+    final remainingMs = (total - pos).inMilliseconds;
+    final fadeMs = fade * 1000;
+    if (!canContinue || remainingMs > fadeMs) {
+      if (_volume != 100 && remainingMs > 0) _setVolume(100);
+      return;
+    }
+    final t = (remainingMs / fadeMs).clamp(0.0, 1.0);
+    _setVolume(100 * t * t); // squared: sounds more even than a straight line
+  }
+
+  /// Raises the volume from silence over the crossfade time.
+  void _startFadeIn() {
+    _fadeInTimer?.cancel();
+    final fade = crossfadeSeconds.value;
+    if (!_autoAdvance || fade == 0) {
+      _autoAdvance = false;
+      _setVolume(100);
+      return;
+    }
+    _autoAdvance = false;
+    final start = DateTime.now();
+    _setVolume(0);
+    _fadeInTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      final done = DateTime.now().difference(start).inMilliseconds / (fade * 1000);
+      if (done >= 1 || _disposed) {
+        t.cancel();
+        _setVolume(100);
+        return;
+      }
+      _setVolume(100 * done * done);
+    });
+  }
 
   void setHandler(BaseAudioHandler handler) {
     _handler = handler as PlayTorrioAudioHandler;
@@ -98,7 +171,15 @@ class MusicPlayerService {
       debugPrint('MusicPlayerService: buffering -> $b');
       isBuffering.value = b;
     });
-    _player.stream.position.listen((p) => position.value = p);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getInt(_crossfadePrefKey) ?? 0;
+      crossfadeSeconds.value = crossfadeOptions.contains(saved) ? saved : 0;
+    } catch (_) {}
+    _player.stream.position.listen((p) {
+      position.value = p;
+      _applyFadeOut(p);
+    });
     _player.stream.duration.listen((d) {
       if (d != Duration.zero) {
         debugPrint('MusicPlayerService: duration loaded -> $d');
@@ -126,6 +207,7 @@ class MusicPlayerService {
     _player.stream.completed.listen((completed) {
       debugPrint('MusicPlayerService: completed -> $completed');
       if (completed && !_isLoadingTrack) {
+        _autoAdvance = true;
         next();
       }
     });
@@ -148,6 +230,8 @@ class MusicPlayerService {
       playbackError.value = null;
 
       debugPrint('MusicPlayerService: stopping previous playback');
+      _fadeInTimer?.cancel();
+      if (!_autoAdvance) _setVolume(100);
       await _player.stop();
 
       if (newPlaylist != null) {
@@ -193,6 +277,7 @@ class MusicPlayerService {
             await _player.open(Media(track.localPath!));
             debugPrint('MusicPlayerService: open() returned for local file');
             _consecutiveFailures = 0;
+            _startFadeIn();
           } catch (e, st) {
             debugPrint('MusicPlayerService: open() THREW for local file: $e\n$st');
             rethrow;
@@ -243,6 +328,7 @@ class MusicPlayerService {
         if (_playGeneration != generation) return;
         if (started) {
           _consecutiveFailures = 0;
+          _startFadeIn();
           _prefetchNext();
           return;
         }
@@ -287,6 +373,9 @@ class MusicPlayerService {
     if (_playGeneration != generation) return; // a newer track took over
     debugPrint('MusicPlayerService: FAILED — $message');
     isBuffering.value = false;
+    _autoAdvance = false;
+    _fadeInTimer?.cancel();
+    _setVolume(100);
     _player.stop().catchError((_) {});
 
     // In an album / playlist / saved songs, skip to the next song instead of
@@ -426,6 +515,7 @@ class MusicPlayerService {
   Future<void> disposePlayer() async {
     if (_disposed) return;
     _disposed = true;
+    _fadeInTimer?.cancel();
     try {
       await _player.stop();
     } catch (_) {}

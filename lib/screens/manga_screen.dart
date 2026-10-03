@@ -692,7 +692,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    'Chapter ${chapter.number}',
+                                    'Chapter ${chapter.numberLabel}',
                                     style: const TextStyle(
                                       color: AppTheme.primaryColor,
                                       fontSize: 12,

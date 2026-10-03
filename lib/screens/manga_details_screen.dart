@@ -303,8 +303,8 @@ class _MangaDetailsScreenState extends State<MangaDetailsScreen> {
             final actualIndex = startIndex + index;
             final chapter = displayedChapters[index];
             final chapterTitle = chapter.name.isNotEmpty 
-                ? 'Chapter ${chapter.number} - ${chapter.name}' 
-                : 'Chapter ${chapter.number}';
+                ? 'Chapter ${chapter.numberLabel} - ${chapter.name}' 
+                : 'Chapter ${chapter.numberLabel}';
             
             return ListTile(
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

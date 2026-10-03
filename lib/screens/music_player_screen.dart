@@ -776,6 +776,37 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
               ),
               // Next
               _buildControlIcon(Icons.skip_next_rounded, onTap: () => player.next(), size: 36),
+              // Crossfade (fade out / fade in between songs)
+              ValueListenableBuilder<int>(
+                valueListenable: player.crossfadeSeconds,
+                builder: (context, secs, _) => Tooltip(
+                  message: secs == 0
+                      ? 'Crossfade: off'
+                      : 'Crossfade: $secs seconds',
+                  child: GestureDetector(
+                    onTap: () => player.cycleCrossfade(),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.blur_linear_rounded,
+                              size: 22,
+                              color: secs > 0
+                                  ? AppTheme.primaryColor
+                                  : Colors.white.withValues(alpha: 0.65)),
+                          if (secs > 0)
+                            Text('${secs}s',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppTheme.primaryColor,
+                                    fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               // Loop
               ValueListenableBuilder<PlaylistMode>(
                 valueListenable: player.loopMode,

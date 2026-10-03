@@ -198,7 +198,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen> {
     setState(() => _isLoading = true);
     
     final chapter = widget.chapters[_currentChapterIndex];
-    debugPrint('[MangaReader] Loading chapter ${chapter.number}');
+    debugPrint('[MangaReader] Loading chapter ${chapter.numberLabel}');
     final images = await _mangaService.getChapterImages(chapter.id);
     
     debugPrint('[MangaReader] Received ${images.length} images');
@@ -288,8 +288,8 @@ class _MangaReaderScreenState extends State<MangaReaderScreen> {
   Widget build(BuildContext context) {
     final chapter = widget.chapters[_currentChapterIndex];
     final chapterTitle = chapter.name.isNotEmpty 
-        ? 'Chapter ${chapter.number} - ${chapter.name}' 
-        : 'Chapter ${chapter.number}';
+        ? 'Chapter ${chapter.numberLabel} - ${chapter.name}' 
+        : 'Chapter ${chapter.numberLabel}';
 
     return KeyboardListener(
       focusNode: _focusNode,
@@ -437,7 +437,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen> {
                   child: ElevatedButton.icon(
                     onPressed: _nextChapter,
                     icon: const Icon(Icons.skip_next),
-                    label: Text('Next Chapter: ${widget.chapters[_currentChapterIndex - 1].number}'),
+                    label: Text('Next Chapter: ${widget.chapters[_currentChapterIndex - 1].numberLabel}'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.primaryColor,
                       foregroundColor: Colors.white,

@@ -724,7 +724,11 @@ class AnimeService {
   ///
   /// No webview / JS execution required. Returns null on failure so callers
   /// can fall back to the headless extractor.
+  /// Why the last generic (megaplay/vidwish) lookup failed, for the error screen.
+  final Map<String, String> extractErrors = {};
+
   Future<AnimeStreamResult?> extractDirect(AnimeEmbed embed) async {
+    extractErrors.remove(embed.url);
     if (embed.server == 'miruro') {
       return _extractMiruro(embed);
     }
@@ -752,6 +756,7 @@ class AnimeService {
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
       final pageRes = await pageReq.close();
       if (pageRes.statusCode != 200) {
+        extractErrors[embed.url] = 'site answered HTTP ${pageRes.statusCode}';
         if (kDebugMode) {
           debugPrint('[extractDirect] embed page HTTP ${pageRes.statusCode}');
         }
@@ -760,6 +765,7 @@ class AnimeService {
       final html = await pageRes.transform(utf8.decoder).join();
       final m = RegExp(r'data-id\s*=\s*"(\d+)"').firstMatch(html);
       if (m == null) {
+        extractErrors[embed.url] = 'episode page had no video id';
         if (kDebugMode) debugPrint('[extractDirect] data-id not found');
         return null;
       }
@@ -778,6 +784,7 @@ class AnimeService {
         ..set('Accept', 'application/json, text/plain, */*');
       final apiRes = await apiReq.close();
       if (apiRes.statusCode != 200) {
+        extractErrors[embed.url] = 'stream request got HTTP ${apiRes.statusCode}';
         if (kDebugMode) {
           debugPrint('[extractDirect] getSources HTTP ${apiRes.statusCode}');
         }
@@ -788,6 +795,7 @@ class AnimeService {
       final file = (json['sources'] is Map ? json['sources']['file'] : null)
           as String?;
       if (file == null || file.isEmpty) {
+        extractErrors[embed.url] = 'site returned no video link';
         if (kDebugMode) debugPrint('[extractDirect] no sources.file');
         return null;
       }
@@ -817,6 +825,7 @@ class AnimeService {
         tracks: tracks,
       );
     } catch (e, st) {
+      extractErrors[embed.url] = '$e';
       if (kDebugMode) debugPrint('[extractDirect] error: $e\n$st');
       return null;
     }

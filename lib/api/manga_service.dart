@@ -74,6 +74,10 @@ class MangaChapter {
   final String url;
   final String rawName;
 
+  /// "12" or "12.5" (no trailing ".0").
+  String get numberLabel =>
+      number == number.roundToDouble() ? number.toInt().toString() : number.toString();
+
   MangaChapter({
     required this.id,
     required this.number,
@@ -83,22 +87,30 @@ class MangaChapter {
   });
 
   factory MangaChapter.fromRaw(String id, String rawName, String url) {
-    String cleaned = rawName;
-    if (cleaned.toLowerCase().startsWith('chapter')) {
-      cleaned = cleaned.substring(7).trim();
-    }
-    final separatorIndex = cleaned.indexOf(RegExp(r'[:\-–]'));
-    String numberStr;
-    String title;
-    if (separatorIndex > 0) {
-      numberStr = cleaned.substring(0, separatorIndex).trim();
-      title = cleaned.substring(separatorIndex + 1).trim();
+    final raw = rawName.replaceAll(RegExp(r'\s+'), ' ').trim();
+    double? number;
+    String title = '';
+
+    // "Chapter 12", "Chapter 12.5: Title", "Ch. 12 - Title", "Episode 3"...
+    final labelled = RegExp(
+      r'(?:chapter|chap|ch|episode|ep|#)\.?\s*(\d+(?:\.\d+)?)\s*[:\-–—.]?\s*(.*)',
+      caseSensitive: false,
+    ).firstMatch(raw);
+    if (labelled != null) {
+      number = double.tryParse(labelled.group(1)!);
+      title = (labelled.group(2) ?? '').trim();
     } else {
-      numberStr = cleaned.trim();
-      title = '';
+      // No label: use the first number anywhere in the text.
+      final any = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(raw);
+      if (any != null) {
+        number = double.tryParse(any.group(1)!);
+        title = raw.replaceFirst(any.group(0)!, '').replaceAll(RegExp(r'^[\s:\-–—.]+'), '').trim();
+      }
     }
-    final number = double.tryParse(numberStr) ?? 0;
-    return MangaChapter(id: id, number: number, name: title, url: url, rawName: rawName);
+    // number == null means "couldn't tell"; getChapters() fills it in from
+    // the chapter's position in the list.
+    return MangaChapter(
+        id: id, number: number ?? -1, name: title, url: url, rawName: rawName);
   }
 
   factory MangaChapter.fromJson(Map<String, dynamic> json) {
@@ -316,20 +328,40 @@ class MangaService {
         final chapterId = _extractChapterId(href);
         if (chapterId == null) continue;
 
-        String chapterName = '';
-        for (final span in a.querySelectorAll('span')) {
-          final t = span.text.trim();
-          if (t.isNotEmpty &&
-              !t.contains('{') &&
-              !t.contains('.st0') &&
-              !t.contains('fill:')) {
-            chapterName = t;
-            break;
+        // Use the link's visible text (skip svg/style noise), so the number is
+        // found whichever element the site puts it in.
+        final clone = a.clone(true);
+        for (final junk in clone.querySelectorAll('svg, style, script')) {
+          junk.remove();
+        }
+        var chapterName = clone.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (chapterName.contains('{') || chapterName.contains('.st0')) {
+          chapterName = '';
+          for (final span in a.querySelectorAll('span')) {
+            final t = span.text.trim();
+            if (t.isNotEmpty && !t.contains('{') && !t.contains('fill:')) {
+              chapterName = t;
+              break;
+            }
           }
         }
 
         if (chapterName.isNotEmpty) {
           chapters.add(MangaChapter.fromRaw(chapterId, chapterName, href));
+        }
+      }
+
+      // Any chapter whose number couldn't be read gets its place in the
+      // list (the site lists newest first) instead of showing as 0.
+      for (var i = 0; i < chapters.length; i++) {
+        if (chapters[i].number < 0) {
+          final c = chapters[i];
+          chapters[i] = MangaChapter(
+              id: c.id,
+              number: (chapters.length - i).toDouble(),
+              name: c.name,
+              url: c.url,
+              rawName: c.rawName);
         }
       }
 
