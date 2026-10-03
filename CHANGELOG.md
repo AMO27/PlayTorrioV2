@@ -4,6 +4,62 @@ Changes made in this fork on top of upstream
 [ayman708-UX/PlayTorrioV2](https://github.com/ayman708-UX/PlayTorrioV2),
 on branch `fix/shutdown-music-comics`. Commit hashes are in brackets.
 
+## Why this fork exists
+
+The upstream app had problems that made it hard to use day to day: the app
+froze or crashed when closing a movie or the window, music and comics stopped
+working when their sources changed, several live-sports sources went offline,
+and the updater pointed at upstream's builds. This fork fixes those, adds
+clearer error messages so a failure says *why* instead of spinning forever,
+and keeps Windows and iPhone builds working. Builds are manual-only (run the
+workflow when you want one) so a push never starts a build by surprise.
+
+## 2026-10-03
+
+### Manga
+- **Chapter numbers show correctly.** Every chapter was listed as "0.0".
+  The number is now read from the chapter label in any common format
+  ("Chapter 12", "Ch. 12.5", "Episode 3"), falls back to the chapter's place
+  in the list if the site gives none, and shows "12" instead of "12.0".
+  [48c6264]
+
+### Anime
+- **"No streams available" now says why.** The error screen lists what went
+  wrong for each source (for example "site answered HTTP 403"), and says so
+  when the show can't be found on the stream site, so the real cause can be
+  fixed. [48c6264]
+
+### Music
+- **Crossfade.** A new button next to repeat in the music player cycles
+  Off / 3 / 6 / 9 / 12 seconds. The end of a song fades out and the next one
+  fades in when a song ends on its own. (The two songs don't overlap yet.)
+  [48c6264]
+
+## 2026-10-02
+
+### Music
+- **Unplayable songs are skipped.** In an album, playlist or saved songs, a
+  song that can't be played is skipped instead of stopping the music; it only
+  stops if every song in a row fails. [97159cb]
+- **Clear error messages.** A red message says why a song failed (YouTube
+  gave no link, or gave a link that wouldn't play). [97159cb]
+- **iPhone no longer opens the YouTube app** when a song is requested; the
+  hidden helper page is locked so it can't navigate away. [97159cb]
+- Fallbacks when YouTube blocks the built-in extractor: several YouTube app
+  "clients", a code-based unblocker, public Invidious/Piped mirrors, and the
+  bundled yt-dlp on Windows.
+
+### iPhone
+- **Movies, TV and anime streaming/torrents work again** by pinning the
+  torrent engine to 1.8.5 for the iOS build (1.9.9 broke it on iPhone).
+- Music downloads save to the app's Documents folder.
+
+### Windows
+- **Minimize / maximize / close buttons are always visible.** The title bar
+  followed the Windows light/dark setting while the app is always dark, so the
+  icons could blend in until hovered. The title bar is now always dark.
+  [97159cb]
+
 ## 2026-09-29
 
 ### Stability
