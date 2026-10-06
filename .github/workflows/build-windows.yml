@@ -52,7 +52,18 @@ jobs:
       - name: Bundle yt-dlp
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "build/windows/x64/runner/Release/yt-dlp.exe"
+          $base = "https://github.com/yt-dlp/yt-dlp/releases/latest/download"
+          $out = "build/windows/x64/runner/Release/yt-dlp.exe"
+          Invoke-WebRequest -Uri "$base/yt-dlp.exe" -OutFile $out
+          # Verify the download against yt-dlp's own published checksum list,
+          # so a tampered or truncated file never ships inside the app.
+          Invoke-WebRequest -Uri "$base/SHA2-256SUMS" -OutFile "yt-dlp-sums.txt"
+          $line = Get-Content "yt-dlp-sums.txt" | Where-Object { $_ -match '\s\*?yt-dlp\.exe$' } | Select-Object -First 1
+          if (-not $line) { throw "yt-dlp.exe not found in SHA2-256SUMS" }
+          $expected = ($line -split '\s+')[0].ToLower()
+          $actual = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) { throw "yt-dlp.exe checksum mismatch ($actual vs $expected)" }
+          Write-Host "yt-dlp.exe checksum OK: $actual"
       - uses: actions/upload-artifact@v4
         with:
           name: PlayTorrio-windows

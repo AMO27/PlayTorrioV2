@@ -23,6 +23,7 @@ class LibraryGame {
   String description;
   PlayStatus status;
   String? downloadTaskId;
+  String? launchPath; // the game's .exe (Windows), chosen by the user
 
   LibraryGame({
     required this.id,
@@ -33,6 +34,7 @@ class LibraryGame {
     this.description = '',
     this.status = PlayStatus.want,
     this.downloadTaskId,
+    this.launchPath,
   });
 
   Map<String, dynamic> toJson() => {
@@ -44,6 +46,7 @@ class LibraryGame {
         'description': description,
         'status': status.name,
         'downloadTaskId': downloadTaskId,
+        'launchPath': launchPath,
       };
 
   static LibraryGame? fromJson(Object? j) {
@@ -60,6 +63,7 @@ class LibraryGame {
       status: PlayStatus.values.firstWhere((s) => s.name == j['status'],
           orElse: () => PlayStatus.want),
       downloadTaskId: j['downloadTaskId']?.toString(),
+      launchPath: j['launchPath']?.toString(),
     );
   }
 }
@@ -151,6 +155,11 @@ class GameLibrary extends ChangeNotifier {
     g.downloadTaskId = taskId;
     await _save();
     return g;
+  }
+
+  Future<void> setLaunchPath(LibraryGame g, String? path) async {
+    g.launchPath = path;
+    await _save();
   }
 
   Future<void> setStatus(LibraryGame g, PlayStatus s) async {

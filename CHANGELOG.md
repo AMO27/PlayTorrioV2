@@ -44,9 +44,19 @@ workflow when you want one) so a push never starts a build by surprise.
   "Want to play" (or reuses the game's entry) with a Downloading /
   Downloaded / Failed badge; failed or cancelled ones stay there with Retry.
   On Windows you also get "Open folder" and, for .exe / .msi, "Launch".
+- **Library: Launch and Delete (Windows).** Games you downloaded get a
+  Launch button (for .exe/.msi downloads directly; for zips, pick the game's
+  .exe once with "Choose game file" and it is remembered). Launching moves the
+  game to "Playing". Downloaded games also have "Delete file", which removes
+  the downloaded file after a confirmation (an already extracted or installed
+  copy is not touched; uninstall it from Windows Settings > Apps).
 - **Build note:** the in-app browser package was bumped to
   `flutter_inappwebview ^6.2.0-beta.3`. Download interception on Windows
   only exists in that version.
+
+### Security
+- **The yt-dlp bundled into the Windows build is now checked against
+  yt-dlp's own published SHA-256 list**; the build stops if it doesn't match.
 
 ## 2026-10-05
 

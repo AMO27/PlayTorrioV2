@@ -37,6 +37,34 @@ Future<void> launchDownloaded(DownloadTask t) async {
   } catch (_) {}
 }
 
+/// Deletes the downloaded file from disk after a confirmation. If the file
+/// was a zip/installer that was already extracted or installed elsewhere,
+/// that copy stays (uninstall it from Windows Settings > Apps).
+Future<bool> confirmDeleteDownload(BuildContext context, DownloadTask t) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Delete the downloaded file?'),
+      content: Text(
+          '${t.path}\n\nThis deletes the file from your computer. If you already '
+          'extracted or installed the game, that copy is not touched; uninstall '
+          'it from Windows Settings > Apps.'),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep')),
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('Delete file')),
+      ],
+    ),
+  );
+  if (ok != true) return false;
+  await DownloadManager.instance.remove(t.id, deleteFile: true);
+  return true;
+}
+
 /// Asks what to do with the partial file when a download is cancelled.
 Future<void> askCancel(BuildContext context, DownloadTask t) async {
   final choice = await showDialog<String>(
@@ -117,6 +145,13 @@ class DownloadStatusView extends StatelessWidget {
                 onPressed: () => openDownloadFolder(t),
                 icon: const Icon(Icons.folder_open, size: 16),
                 label: const Text('Open folder'),
+              ),
+            if (Platform.isWindows)
+              TextButton.icon(
+                onPressed: () => confirmDeleteDownload(context, t),
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Delete file'),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
               ),
             if (Platform.isWindows && t.isInstaller)
               TextButton.icon(

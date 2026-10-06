@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 import '../../api/game_downloader.dart';
 import '../../api/game_library.dart';
 import '../../api/games_service.dart';
@@ -49,6 +53,55 @@ class _GamesLibraryTabState extends State<GamesLibraryTab>
   Future<void> _remove(LibraryGame g) async {
     final i = await _lib.remove(g);
     _undoSnack('Removed ${g.name}', () => _lib.restore(g, i));
+  }
+
+  /// Lets the user pick the game's .exe (or shortcut) so Launch works.
+  Future<String?> _pickLaunchFile(LibraryGame g) async {
+    final task = DownloadManager.instance.byId(g.downloadTaskId);
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Choose the file that starts ${g.name}',
+      type: FileType.custom,
+      allowedExtensions: const ['exe', 'lnk', 'bat', 'cmd', 'msi'],
+      initialDirectory: task?.dir,
+    );
+    final path = result?.files.single.path;
+    if (path == null) return null;
+    await _lib.setLaunchPath(g, path);
+    return path;
+  }
+
+  /// Starts the game, then moves it to "Playing".
+  Future<void> _launch(LibraryGame g) async {
+    var path = g.launchPath;
+    final task = DownloadManager.instance.byId(g.downloadTaskId);
+    if (path == null && task != null && task.state == DlState.downloaded && task.isInstaller) {
+      path = task.path;
+    }
+    path ??= await _pickLaunchFile(g);
+    if (path == null) return;
+    if (!File(path).existsSync()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("That file isn't there anymore. Choose the game file again.")));
+      await _lib.setLaunchPath(g, null);
+      return;
+    }
+    try {
+      final ext = p.extension(path).toLowerCase();
+      if (ext == '.exe') {
+        await Process.start(path, const [],
+            workingDirectory: p.dirname(path), mode: ProcessStartMode.detached);
+      } else {
+        await launchUrl(Uri.file(path), mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Couldn't start the game: $e")));
+      return;
+    }
+    await _lib.setStatus(g, PlayStatus.playing);
+    if (_filter != null && mounted) setState(() => _filter = PlayStatus.playing);
   }
 
   Future<void> _addByName() async {
@@ -229,6 +282,42 @@ class _GamesLibraryTabState extends State<GamesLibraryTab>
                         ),
                       ],
                     ),
+                    if (Platform.isWindows)
+                      Row(
+                        children: [
+                          if (g.launchPath != null ||
+                              (task != null &&
+                                  task.state == DlState.downloaded &&
+                                  task.isInstaller))
+                            FilledButton.icon(
+                              onPressed: () => _launch(g),
+                              icon: const Icon(Icons.play_arrow, size: 18),
+                              label: const Text('Launch'),
+                              style: FilledButton.styleFrom(
+                                  visualDensity: VisualDensity.compact),
+                            ),
+                          PopupMenuButton<String>(
+                            tooltip: 'Game file',
+                            icon: const Icon(Icons.more_horiz,
+                                size: 20, color: Colors.white54),
+                            onSelected: (v) {
+                              if (v == 'choose') _pickLaunchFile(g);
+                              if (v == 'launch') _launch(g);
+                            },
+                            itemBuilder: (_) => [
+                              if (g.launchPath == null)
+                                const PopupMenuItem(
+                                    value: 'launch',
+                                    child: Text('Launch (choose game file)')),
+                              PopupMenuItem(
+                                  value: 'choose',
+                                  child: Text(g.launchPath == null
+                                      ? 'Choose game file'
+                                      : 'Change game file')),
+                            ],
+                          ),
+                        ],
+                      ),
                     if (task != null) ...[
                       const SizedBox(height: 4),
                       DownloadStatusView(task: task),
