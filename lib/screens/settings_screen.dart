@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api/settings_service.dart';
+import 'games/games_igdb_settings.dart';
 import '../api/stream_providers.dart';
 import '../api/stremio_service.dart';
 import '../api/nuvio_service.dart';
@@ -707,6 +708,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [_buildNavbarConfig()],
                     ),
 
+                    // ── Games ──
+                    _buildExpandableSection(
+                      id: 'games',
+                      icon: Icons.sports_esports_rounded,
+                      title: 'Games',
+                      children: const [GamesIgdbSettings()],
+                    ),
+
                     // ── App Updates ──
                     _buildExpandableSection(
                       id: 'updates',
@@ -1021,6 +1030,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'manga':        {'icon': Icons.book,                       'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_rounded,                'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_filled,         'label': 'Anime'},
+    'games':        {'icon': Icons.sports_esports,              'label': 'Games'},
     'anime_arabic': {'icon': Icons.subtitles,                  'label': 'Anime Arabic'},
     'asian_drama':  {'icon': Icons.theater_comedy,             'label': 'Asian Drama'},
     'arabic':       {'icon': Icons.movie_filter,               'label': 'Arabic'},

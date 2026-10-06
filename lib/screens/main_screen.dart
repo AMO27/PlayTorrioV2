@@ -16,6 +16,7 @@ import 'manga_screen.dart';
 import 'jellyfin_screen.dart';
 import 'anime_screen.dart';
 import 'anime_arabic_screen.dart';
+import 'games/games_screen.dart';
 import 'asian_drama_screen.dart';
 import 'similar/similar_hub_screen.dart';
 import 'media_downloader_screen.dart';
@@ -72,6 +73,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'manga':        {'icon': Icons.book_outlined,               'active': Icons.book,                    'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_outlined,                'active': Icons.dns_rounded,             'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_outline,         'active': Icons.play_circle_filled,      'label': 'Anime'},
+    'games':        {'icon': Icons.sports_esports_outlined,     'active': Icons.sports_esports,          'label': 'Games'},
     'anime_arabic': {'icon': Icons.subtitles_outlined,           'active': Icons.subtitles,                'label': 'Anime Arabic'},
     'asian_drama':  {'icon': Icons.theater_comedy_outlined,     'active': Icons.theater_comedy,          'label': 'Asian Drama'},
     'arabic':       {'icon': Icons.movie_filter_outlined,       'active': Icons.movie_filter,            'label': 'Arabic'},
@@ -106,6 +108,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'manga':        MangaScreen(initialSearch: null),
       'jellyfin':     const JellyfinScreen(),
       'anime':        const AnimeScreen(),
+      'games':        const GamesScreen(),
       'anime_arabic': const AnimeArabicScreen(),
       'asian_drama':  const AsianDramaScreen(),
       'arabic':       const ArabicScreen(),

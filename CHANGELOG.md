@@ -14,13 +14,59 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-06
+
+### Games (new section)
+- **New "Games" entry in the side menu, right under Anime**, on Windows and
+  iPhone, with four tabs: Play, Upcoming, Library and (Windows only) Download.
+- **Play.** Opens RetroGames, Poki and now.gg inside the app. The in-app
+  browser has an address bar, back / forward / reload, and a star that saves
+  the page you are on. Saved sites show as tiles (rename or remove from the
+  tile's menu; removing shows an Undo message that closes after 5 seconds).
+  The list is stored on the device and is separate from the Download tab's.
+- **Upcoming.** Popular unreleased games, most popular first: PC games from
+  Steam (no key needed) and console games (PS5, Xbox Series, Switch) from
+  IGDB when a free Twitch Client ID / Secret is pasted in Settings > Games
+  (kept only on the device). Cards show platform tags and a release label
+  (date, "TBA" or "Out now"). The detail page has the trailer (starts only
+  when tapped), screenshots, genres, description and a Library button.
+- **Library.** Your own list, stored only on the device, with game name,
+  cover, platform, release date and description, plus one of three statuses:
+  Want to play / Playing / Played. Add from Upcoming, by searching Steam /
+  IGDB, or by name only. Removing shows an Undo message that closes after
+  5 seconds.
+- **Download (Windows).** An in-app browser with its own saved-sites list
+  (starts with itch.io and archive.org). When a page starts a file download,
+  the app asks you to confirm, then downloads it itself: it resumes partial
+  files, uses 4 parallel pieces when the site allows it, retries by itself,
+  checks the final size, and shows progress, speed and time left. The folder
+  you pick is remembered. Every download is added to the Library as
+  "Want to play" (or reuses the game's entry) with a Downloading /
+  Downloaded / Failed badge; failed or cancelled ones stay there with Retry.
+  On Windows you also get "Open folder" and, for .exe / .msi, "Launch".
+- **Build note:** the in-app browser package was bumped to
+  `flutter_inappwebview ^6.2.0-beta.3`. Download interception on Windows
+  only exists in that version.
+
 ## 2026-10-05
 
 ### Manga
 - **Chapter titles no longer include junk** like "Mag Version" or
   "Last Read 2026-08-13…". Only the "Chapter N" label is used.
+- **"Last read" shows only on the chapter you actually last read**, not on
+  every chapter.
 
 ### Anime
+- **HD-1 / MegaPlay streams work again.** The site started sending the video
+  link encrypted (AES-256-CBC) plus a short-lived CDN token. The app now
+  decrypts the link and adds the token the same way the website's own player
+  does.
+- **New source: AniHQ.** A plain site with no bot check that links each
+  episode as a direct video file (via Pixeldrain), for both sub and dub.
+  Miruro and AllAnime now put a bot check in front of their streams, so they
+  were moved to the bottom of the source list instead of being removed.
+- **Miruro tries its mirror addresses** (miruro.bz / .to / .ru) when the main
+  one answers 403 (Cloudflare), and remembers the one that works.
 - **Dub/sub fallback.** If an episode has nothing in the chosen language, the
   player automatically tries the other one before showing an error.
 - **Real failure reasons for every source** (Miruro, AllAnime, megaplay) on the
@@ -28,8 +74,13 @@ workflow when you want one) so a push never starts a build by surprise.
   "couldn't decrypt", so the cause can be fixed instead of guessed.
 - Removed the HD-2 (vidwish.live) source; the site now redirects to megaplay.
 - The megaplay reader accepts more reply formats, and says when the site now
-  sends the video link encrypted. (Known issue: recent reports say megaplay
-  encrypts its links; streams from it may need a decryption update.)
+  sends the video link encrypted (decryption was added afterwards, see the
+  HD-1 entry above).
+
+### Build
+- **Workflow runs get a descriptive name.** Windows and iOS builds are titled
+  with a note typed in "Run workflow" instead of always showing the workflow
+  name.
 
 ### My List
 - **The "Removed from My List" message now closes after 5 seconds** instead of
