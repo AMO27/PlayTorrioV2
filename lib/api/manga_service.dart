@@ -355,6 +355,14 @@ class MangaService {
               orElse: () => texts.first);
         }
 
+        // The label element can wrap the extras too ("Chapter 12 Mag Version
+        // Last Read 2026-08-13T…"), so cut the text where they start.
+        chapterName = chapterName
+            .split(RegExp(r'\s*(?:Mag Version|Last Read|\d{4}-\d{2}-\d{2}T)',
+                caseSensitive: false))
+            .first
+            .trim();
+
         if (chapterName.isNotEmpty) {
           chapters.add(MangaChapter.fromRaw(chapterId, chapterName, href));
         }

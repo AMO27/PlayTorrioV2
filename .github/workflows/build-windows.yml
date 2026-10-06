@@ -4,8 +4,18 @@ name: Build Windows
 # Run it from the repo's Actions tab ("Run workflow"), then download the
 # "PlayTorrio-windows" artifact when it finishes.
 # Manual only: start it from the Actions tab ("Run workflow").
+# Each run is titled with the note typed in "Run workflow" (or passed by
+# whoever starts it), so the Actions list shows what was built instead of
+# just "Build Windows".
+run-name: Windows build — ${{ inputs.title || github.ref_name }}
+
 on:
   workflow_dispatch:
+    inputs:
+      title:
+        description: "What's in this build (shown as the run name)"
+        required: false
+        default: ''
 
 jobs:
   build:

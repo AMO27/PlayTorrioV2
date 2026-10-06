@@ -3,10 +3,14 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart' as crypto;
+import 'package:pointycastle/export.dart' as pc;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'allanime_extractor.dart';
+import 'anihq_extractor.dart';
 import 'watchhentai_extractor.dart';
 import 'hentaini_extractor.dart';
 import 'miruro_extractor.dart';
@@ -652,36 +656,20 @@ class AnimeService {
         ),
       ]);
     }
-    // Miruro fallback — emit one embed per known provider per category. The
-    // resolver fans them all out in parallel; whichever returns a stream
-    // first wins. The episodes lookup is cached inside MiruroExtractor so all
-    // parallel attempts share a single network round-trip.
-    for (final cat in const ['sub', 'dub']) {
-      for (final prov in MiruroExtractor.knownProviders) {
-        all.add(AnimeEmbed(
-          label: 'Miruro·$prov',
-          server: 'miruro',
-          category: cat,
-          url: 'miruro://anilist/$anilistId/$episode/$cat/$prov',
-        ));
-      }
-    }
-    // AllAnime (allmanga.to) fallback — same parallel-race pattern. Only emit
-    // if at least one title was provided so the extractor can search.
     final titles = animeTitles
         .where((t) => t.trim().isNotEmpty)
         .map((t) => Uri.encodeComponent(t.trim()))
         .join(',');
+    // AniHQ — plain site, direct MP4 files. Searched by title, so it only
+    // needs the title list (no Anikoto match required).
     if (titles.isNotEmpty) {
       for (final cat in const ['sub', 'dub']) {
-        for (final prov in AllAnimeExtractor.knownProviders) {
-          all.add(AnimeEmbed(
-            label: 'AllAnime·$prov',
-            server: 'allanime',
-            category: cat,
-            url: 'allanime://search/$episode/$cat/$prov?t=$titles',
-          ));
-        }
+        all.add(AnimeEmbed(
+          label: 'AniHQ',
+          server: 'anihq',
+          category: cat,
+          url: 'anihq://search/$episode/$cat?t=$titles',
+        ));
       }
     }
     // WatchHentai — only for adult titles. Single embed; the extractor
@@ -699,6 +687,36 @@ class AnimeService {
         category: 'sub',
         url: 'hentaini://discover/$episode?t=$titles',
       ));
+    }
+    // Miruro and AllAnime now sit behind bot checks, so they rarely work.
+    // They stay in the list but at the very bottom, after the working ones.
+    //
+    // Miruro: one embed per known provider per category. The resolver fans
+    // them all out in parallel; the episodes lookup is cached inside
+    // MiruroExtractor so all attempts share a single network round-trip.
+    for (final cat in const ['sub', 'dub']) {
+      for (final prov in MiruroExtractor.knownProviders) {
+        all.add(AnimeEmbed(
+          label: 'Miruro·$prov',
+          server: 'miruro',
+          category: cat,
+          url: 'miruro://anilist/$anilistId/$episode/$cat/$prov',
+        ));
+      }
+    }
+    // AllAnime (allmanga.to) — same parallel-race pattern. Only emit if at
+    // least one title was provided so the extractor can search.
+    if (titles.isNotEmpty) {
+      for (final cat in const ['sub', 'dub']) {
+        for (final prov in AllAnimeExtractor.knownProviders) {
+          all.add(AnimeEmbed(
+            label: 'AllAnime·$prov',
+            server: 'allanime',
+            category: cat,
+            url: 'allanime://search/$episode/$cat/$prov?t=$titles',
+          ));
+        }
+      }
     }
     if (category == null) return all;
     return all.where((e) => e.category == category).toList();
@@ -726,6 +744,9 @@ class AnimeService {
     }
     if (embed.server == 'allanime') {
       return _extractAllAnime(embed);
+    }
+    if (embed.server == 'anihq') {
+      return _extractAniHq(embed);
     }
     if (embed.server == 'watchhentai') {
       return _extractWatchHentai(embed);
@@ -807,12 +828,19 @@ class AnimeService {
         file = pick(srcs);
       }
       if (file == null && json is Map) file = pick(json);
-      if (file == null || file.isEmpty) {
-        if (json is Map && json['enc'] != null) {
-          extractErrors[embed.url] =
-              'site now sends the video link encrypted (enc) — needs its decryption key';
+      // MegaPlay now sends the link as `enc` (AES-256-CBC, base64url). The
+      // key/IV ship inside its public player script, so the app decrypts it
+      // the same way the web player does.
+      if ((file == null || file.isEmpty) && json is Map && json['enc'] is String) {
+        try {
+          file = _decryptMegaplayEnc(json['enc'] as String);
+          file = _attachCdnToken(file);
+        } catch (e) {
+          extractErrors[embed.url] = 'could not decrypt the video link ($e)';
           return null;
         }
+      }
+      if (file == null || file.isEmpty) {
         final snippet = body.replaceAll(RegExp(r'\s+'), ' ');
         extractErrors[embed.url] = 'site returned no video link — it said: '
             '${snippet.length > 100 ? '${snippet.substring(0, 100)}…' : snippet}';
@@ -849,6 +877,69 @@ class AnimeService {
       if (kDebugMode) debugPrint('[extractDirect] error: $e\n$st');
       return null;
     }
+  }
+
+  // MegaPlay's player script (e1-player.min.js) decrypts `enc` with these
+  // constants; they are public in the page source.
+  static const String _megaEncKey = "i?LMTAx0Q6,:}50U";
+  static const String _megaEncIv = "W0;27ToaUpl_P%'c";
+  static const String _megaCdnSecret = 'MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s';
+
+  static Uint8List _padBytes(String s, int n) {
+    final out = Uint8List(n);
+    final b = utf8.encode(s);
+    for (var i = 0; i < n && i < b.length; i++) {
+      out[i] = b[i];
+    }
+    return out;
+  }
+
+  static Uint8List _b64UrlDecode(String s) {
+    var t = s.replaceAll('-', '+').replaceAll('_', '/');
+    while (t.length % 4 != 0) {
+      t += '=';
+    }
+    return base64.decode(t);
+  }
+
+  static String _b64UrlEncode(List<int> b) =>
+      base64.encode(b).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+
+  /// AES-256-CBC (zero-padded key/IV, PKCS7) → JSON with a `file` link.
+  String _decryptMegaplayEnc(String enc) {
+    final cipher = pc.PaddedBlockCipherImpl(
+      pc.PKCS7Padding(),
+      pc.CBCBlockCipher(pc.AESEngine()),
+    )..init(
+        false,
+        pc.PaddedBlockCipherParameters<pc.ParametersWithIV<pc.KeyParameter>, Null>(
+          pc.ParametersWithIV(
+              pc.KeyParameter(_padBytes(_megaEncKey, 32)), _padBytes(_megaEncIv, 16)),
+          null,
+        ),
+      );
+    final plain = cipher.process(_b64UrlDecode(enc));
+    final j = jsonDecode(utf8.decode(plain));
+    final f = j is Map ? j['file'] : null;
+    if (f is! String || f.isEmpty) throw 'no file in decrypted data';
+    return f;
+  }
+
+  /// The CDN wants a short-lived HMAC token on the playlist URL, same as the
+  /// web player adds (`?token=<b64(exp|pathKey)>.<b64(hmac)>`).
+  String _attachCdnToken(String url) {
+    if (RegExp(r'[?&]token=').hasMatch(url)) return url;
+    final m = RegExp(r'/([a-f0-9]{32})/([a-f0-9]{32})/', caseSensitive: false)
+        .firstMatch(url);
+    if (m == null) return url;
+    final pathKey = '${m.group(1)!.toLowerCase()}/${m.group(2)!.toLowerCase()}';
+    final exp = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 90;
+    final payload = utf8.encode('$exp|$pathKey');
+    final mac = crypto.Hmac(crypto.sha256, utf8.encode(_megaCdnSecret))
+        .convert(payload)
+        .bytes;
+    final token = '${_b64UrlEncode(payload)}.${_b64UrlEncode(mac)}';
+    return '$url${url.contains('?') ? '&' : '?'}token=${Uri.encodeComponent(token)}';
   }
 
   // Miruro extractor — uses the secure-pipe API to resolve a direct HLS
@@ -937,6 +1028,40 @@ class AnimeService {
                 isDefault: t.isDefault,
               ))
           .toList(),
+    );
+  }
+
+  // AniHQ extractor — sentinel URL format:
+  //   anihq://search/{episode}/{category}?t={enc_title1},{enc_title2}
+  final AniHqExtractor _anihq = AniHqExtractor();
+
+  Future<AnimeStreamResult?> _extractAniHq(AnimeEmbed embed) async {
+    final m = RegExp(r'^anihq://search/(\d+)/(sub|dub)\?t=(.+)$')
+        .firstMatch(embed.url);
+    if (m == null) return null;
+    final ep = int.parse(m.group(1)!);
+    final cat = m.group(2)!;
+    final titles = m
+        .group(3)!
+        .split(',')
+        .map(Uri.decodeComponent)
+        .where((t) => t.isNotEmpty)
+        .toList();
+    if (titles.isEmpty) return null;
+
+    final res = await _anihq.extract(
+      titleCandidates: titles,
+      episode: ep,
+      category: cat,
+    );
+    if (res == null) {
+      extractErrors[embed.url] = _anihq.notes[cat] ?? 'no stream returned';
+      return null;
+    }
+    return AnimeStreamResult(
+      url: res.url,
+      referer: res.referer,
+      origin: res.origin,
     );
   }
 
@@ -1244,6 +1369,8 @@ class AnimeEmbed {
         return 'Miruro · ${category.toUpperCase()}';
       case 'allanime':
         return 'AllAnime · ${category.toUpperCase()}';
+      case 'anihq':
+        return 'AniHQ · ${category.toUpperCase()}';
       case 'watchhentai':
         return 'WatchHentai';
       case 'hentaini':
@@ -1260,6 +1387,8 @@ class AnimeEmbed {
         return 'https://www.miruro.tv';
       case 'allanime':
         return 'https://allmanga.to';
+      case 'anihq':
+        return 'https://anihq.cc';
       case 'watchhentai':
         return 'https://watchhentai.net';
       case 'hentaini':

@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../api/manga_service.dart';
 import '../utils/app_theme.dart';
@@ -22,6 +24,8 @@ class _MangaDetailsScreenState extends State<MangaDetailsScreen> {
   int _currentChapterPage = 0;
   static const int _chaptersPerPage = 20;
   Manga? _fullManga;
+  // Id of the chapter this manga was last read up to (null if never read).
+  String? _lastReadChapterId;
 
   Manga get _manga => _fullManga ?? widget.manga;
 
@@ -31,6 +35,26 @@ class _MangaDetailsScreenState extends State<MangaDetailsScreen> {
     _loadLikedStatus();
     _loadDetails();
     _loadChapters();
+    _loadLastRead();
+  }
+
+  Future<void> _loadLastRead() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final history = prefs.getStringList('manga_reading_history') ?? [];
+      for (final raw in history) {
+        final h = jsonDecode(raw) as Map<String, dynamic>;
+        if (h['manga']?['id'] != widget.manga.id) continue;
+        final idx = h['chapterIndex'] as int?;
+        final chapters = h['chapters'] as List?;
+        if (idx == null || chapters == null || idx < 0 || idx >= chapters.length) break;
+        final id = (chapters[idx] as Map)['id']?.toString();
+        if (mounted) setState(() => _lastReadChapterId = id);
+        break;
+      }
+    } catch (e) {
+      debugPrint('[MangaDetails] last read lookup failed: $e');
+    }
   }
 
   @override
@@ -320,10 +344,16 @@ class _MangaDetailsScreenState extends State<MangaDetailsScreen> {
                 chapterTitle,
                 style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
               ),
-              subtitle: chapter.name.isNotEmpty
-                  ? Text(
-                      chapter.name,
-                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+              subtitle: chapter.id == _lastReadChapterId
+                  ? const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Text(
+                        'Last read',
+                        style: TextStyle(
+                            color: AppTheme.primaryColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700),
+                      ),
                     )
                   : null,
               trailing: const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),

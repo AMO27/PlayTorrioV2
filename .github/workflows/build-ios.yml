@@ -5,8 +5,16 @@ name: Build iOS
 # artifact when it finishes and sideload it (Sideloadly / AltStore).
 #
 # Manual only: start it from the Actions tab ("Run workflow").
+# Each run is titled with the note typed in "Run workflow".
+run-name: iOS build — ${{ inputs.title || github.ref_name }}
+
 on:
   workflow_dispatch:
+    inputs:
+      title:
+        description: "What's in this build (shown as the run name)"
+        required: false
+        default: ''
 
 env:
   FLUTTER_CHANNEL: stable

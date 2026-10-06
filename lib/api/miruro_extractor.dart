@@ -7,6 +7,15 @@ import 'package:flutter/foundation.dart';
 /// Direct extractor for the miruro.tv "secure pipe" API.
 class MiruroExtractor {
   static const String _baseUrl = 'https://www.miruro.tv';
+  // Miruro's official mirrors. The main address can answer 403 (Cloudflare),
+  // so the others are tried too; whichever worked last goes first.
+  static const List<String> _mirrors = [
+    'https://www.miruro.tv',
+    'https://www.miruro.bz',
+    'https://www.miruro.to',
+    'https://www.miruro.ru',
+  ];
+  String _activeBase = _baseUrl;
   static const String _pipeObfKeyHex = '71951034f8fbcf53d89db52ceb3dc22c';
   static const String _protocolVersion = '0.2.0';
 
@@ -136,8 +145,8 @@ class MiruroExtractor {
 
       final referer = (hls['referer'] as String?)?.trim().isNotEmpty == true
           ? hls['referer'] as String
-          : '$_baseUrl/';
-      final origin = Uri.tryParse(referer)?.origin ?? _baseUrl;
+          : '$_activeBase/';
+      final origin = Uri.tryParse(referer)?.origin ?? _activeBase;
 
       final tracks = <MiruroTrack>[];
       final subs = (src['subtitles'] as List?) ?? const [];
@@ -186,32 +195,46 @@ class MiruroExtractor {
     });
     final encoded =
         base64Url.encode(utf8.encode(payload)).replaceAll('=', '');
-    final uri = Uri.parse('$_baseUrl/api/secure/pipe?e=$encoded');
 
-    final req = await _client.getUrl(uri);
-    req.headers
-      ..set('User-Agent',
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-          '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
-      ..set('Referer', '$_baseUrl/')
-      ..set('Origin', _baseUrl)
-      ..set('Accept', 'application/json, text/plain, */*');
-    final res = await req.close();
-    if (res.statusCode != 200) {
-      notes['api'] = '$path request got HTTP ${res.statusCode}';
-      if (kDebugMode) {
-        debugPrint('[Miruro] $path HTTP ${res.statusCode}');
+    // Last working mirror first, then the rest.
+    final bases = [_activeBase, ..._mirrors.where((m) => m != _activeBase)];
+    final problems = <String>[];
+    for (final base in bases) {
+      try {
+        final uri = Uri.parse('$base/api/secure/pipe?e=$encoded');
+        final req = await _client.getUrl(uri);
+        req.headers
+          ..set('User-Agent',
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+          ..set('Referer', '$base/')
+          ..set('Origin', base)
+          ..set('Accept', 'application/json, text/plain, */*')
+          ..set('Sec-Fetch-Site', 'same-origin')
+          ..set('Sec-Fetch-Mode', 'cors')
+          ..set('Sec-Fetch-Dest', 'empty');
+        final res = await req.close().timeout(const Duration(seconds: 15));
+        if (res.statusCode != 200) {
+          problems.add('${Uri.parse(base).host} HTTP ${res.statusCode}');
+          await res.drain<void>();
+          continue;
+        }
+        final bytes = await consolidateHttpClientResponseBytes(res);
+        final body = utf8.decode(bytes);
+
+        final xObf = res.headers.value('x-obfuscated');
+        final decoded = (xObf == null || xObf.isEmpty)
+            ? jsonDecode(body)
+            : jsonDecode(_deobfuscate(body, xObf));
+        _activeBase = base;
+        return decoded;
+      } catch (e) {
+        problems.add('${Uri.parse(base).host}: $e');
       }
-      return null;
     }
-    final bytes = await consolidateHttpClientResponseBytes(res);
-    final body = utf8.decode(bytes);
-
-    final xObf = res.headers.value('x-obfuscated');
-    if (xObf == null || xObf.isEmpty) {
-      return jsonDecode(body);
-    }
-    return jsonDecode(_deobfuscate(body, xObf));
+    notes['api'] = '$path failed on every Miruro address (${problems.join('; ')})';
+    if (kDebugMode) debugPrint('[Miruro] $path ${problems.join('; ')}');
+    return null;
   }
 
   String _deobfuscate(String body, String level) {

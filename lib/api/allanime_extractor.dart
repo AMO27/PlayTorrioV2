@@ -172,7 +172,9 @@ class AllAnimeExtractor {
               (json['data']?['episode']) as Map<String, dynamic>?;
         }
         if (episodeData == null) {
-          notes['stage'] = 'site returned no episode data';
+          final snippet = body.replaceAll(RegExp(r'\s+'), ' ');
+          notes['stage'] = 'site returned no episode data — it said: '
+              '${snippet.length > 110 ? '${snippet.substring(0, 110)}…' : snippet}';
           return const [];
         }
 
