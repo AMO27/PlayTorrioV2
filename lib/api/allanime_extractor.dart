@@ -54,6 +54,10 @@ class AllAnimeExtractor {
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15);
 
+  /// Why the last attempt failed, for the on-screen error list. Keys are
+  /// 'stage' (shared lookup steps) and '{provider}|{category}'.
+  final Map<String, String> notes = {};
+
   final Map<String, Future<String?>> _showIdCache = {};
   final Map<String, Future<List<Map<String, dynamic>>>> _sourcesCache = {};
 
@@ -90,7 +94,10 @@ class AllAnimeExtractor {
       if (resp == null) return null;
       final edges =
           ((resp['data']?['shows']?['edges']) as List?) ?? const [];
-      if (edges.isEmpty) return null;
+      if (edges.isEmpty) {
+        notes['stage'] = 'show not found on AllAnime';
+        return null;
+      }
 
       final qLower = query.toLowerCase();
       Map<String, dynamic>? best;
@@ -106,6 +113,7 @@ class AllAnimeExtractor {
       best ??= (edges.first as Map).cast<String, dynamic>();
       return best['_id']?.toString();
     } catch (e) {
+      notes['stage'] = 'search failed: $e';
       if (kDebugMode) debugPrint('[AllAnime] search "$query" failed: $e');
       return null;
     }
@@ -139,6 +147,7 @@ class AllAnimeExtractor {
           ..set('Accept', 'application/json, text/plain, */*');
         final res = await req.close();
         if (res.statusCode != 200) {
+          notes['stage'] = 'episode list HTTP ${res.statusCode}';
           if (kDebugMode) {
             debugPrint('[AllAnime] episode HTTP ${res.statusCode}');
           }
@@ -151,7 +160,10 @@ class AllAnimeExtractor {
         Map<String, dynamic>? episodeData;
         if (blob != null && blob.isNotEmpty) {
           final plain = _decryptTobeparsed(blob);
-          if (plain == null) return const [];
+          if (plain == null) {
+            notes['stage'] = "couldn't decrypt episode data (site changed its key)";
+            return const [];
+          }
           final decoded = jsonDecode(plain);
           episodeData = (decoded is Map ? decoded['episode'] : null)
               as Map<String, dynamic>?;
@@ -159,7 +171,10 @@ class AllAnimeExtractor {
           episodeData =
               (json['data']?['episode']) as Map<String, dynamic>?;
         }
-        if (episodeData == null) return const [];
+        if (episodeData == null) {
+          notes['stage'] = 'site returned no episode data';
+          return const [];
+        }
 
         final list = (episodeData['sourceUrls'] as List?) ?? const [];
         return list
@@ -167,6 +182,7 @@ class AllAnimeExtractor {
             .map((e) => e.cast<String, dynamic>())
             .toList(growable: false);
       } catch (e) {
+        notes['stage'] = 'episode lookup failed: $e';
         if (kDebugMode) debugPrint('[AllAnime] episode-sources failed: $e');
         return const [];
       }
@@ -179,19 +195,30 @@ class AllAnimeExtractor {
     required String category,
     required String provider,
   }) async {
+    final key = '$provider|$category';
+    notes.remove(key);
     try {
       final showId = await _resolveShowId(titleCandidates, category);
-      if (showId == null) return null;
+      if (showId == null) {
+        notes[key] = notes['stage'] ?? 'show not found on AllAnime';
+        return null;
+      }
 
       final sources = await _episodeSources(showId, episodeNumber, category);
-      if (sources.isEmpty) return null;
+      if (sources.isEmpty) {
+        notes[key] = notes['stage'] ?? 'no sources for this episode';
+        return null;
+      }
 
       final wanted = provider.toLowerCase();
       final matches = sources
           .where((s) =>
               (s['sourceName'] ?? '').toString().toLowerCase() == wanted)
           .toList();
-      if (matches.isEmpty) return null;
+      if (matches.isEmpty) {
+        notes[key] = "no '$provider' source for this episode";
+        return null;
+      }
 
       for (final src in matches) {
         final raw = (src['sourceUrl'] ?? '').toString();
@@ -213,8 +240,10 @@ class AllAnimeExtractor {
           return result;
         }
       }
+      notes[key] = notes['link'] ?? 'source found but link could not be opened';
       return null;
     } catch (e) {
+      notes[key] = '$e';
       if (kDebugMode) debugPrint('[AllAnime] $provider failed: $e');
       return null;
     }
@@ -252,7 +281,10 @@ class AllAnimeExtractor {
         ..set('Origin', _refr)
         ..set('Accept', 'application/json, text/plain, */*');
       final res = await req.close();
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) {
+        notes['link'] = 'video link request HTTP ${res.statusCode}';
+        return null;
+      }
       final body = await res.transform(utf8.decoder).join();
       final json = jsonDecode(body);
       final links = (json is Map ? json['links'] as List? : null) ?? const [];

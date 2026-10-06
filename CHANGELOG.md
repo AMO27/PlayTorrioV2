@@ -14,6 +14,27 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-05
+
+### Manga
+- **Chapter titles no longer include junk** like "Mag Version" or
+  "Last Read 2026-08-13…". Only the "Chapter N" label is used.
+
+### Anime
+- **Dub/sub fallback.** If an episode has nothing in the chosen language, the
+  player automatically tries the other one before showing an error.
+- **Real failure reasons for every source** (Miruro, AllAnime, megaplay) on the
+  "No streams available" screen, such as an HTTP code, "show not found" or
+  "couldn't decrypt", so the cause can be fixed instead of guessed.
+- Removed the HD-2 (vidwish.live) source; the site now redirects to megaplay.
+- The megaplay reader accepts more reply formats, and says when the site now
+  sends the video link encrypted. (Known issue: recent reports say megaplay
+  encrypts its links; streams from it may need a decryption update.)
+
+### My List
+- **The "Removed from My List" message now closes after 5 seconds** instead of
+  staying on screen. UNDO still works during those 5 seconds.
+
 ## 2026-10-03
 
 ### Manga

@@ -99,8 +99,9 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
   String _statusLine = '';
   bool _failedAll = false;
   bool _resolving = false;
+  bool _triedOtherCategory = false;
   // Why each source failed, shown if none of them work.
-  final Map<String, String> _failReasons = {};
+  final Set<String> _failReasons = {};
 
   @override
   void initState() {
@@ -141,18 +142,13 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
       _resolving = true;
       _failedAll = false;
       _statusLine = '';
-      _failReasons.clear();
       _phase = 'Finding a stream…';
     });
     final pair = _currentPair;
     if (pair.isEmpty) {
-      setState(() {
-        _resolving = false;
-        _failedAll = true;
-        _phase = _series == null
-            ? "No streams available — couldn't find this show on the stream site"
-            : 'No streams available';
-      });
+      await _failOrTryOther(_series == null
+          ? "No streams available — couldn't find this show on the stream site"
+          : 'No streams available');
       return;
     }
 
@@ -207,10 +203,28 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
       await _launchPlayer(hits);
       return;
     }
+    await _failOrTryOther('No streams available');
+  }
+
+  /// Dubs often don't exist for every episode, so when one category has
+  /// nothing, try the other once before showing the error.
+  Future<void> _failOrTryOther(String message) async {
+    if (!_triedOtherCategory && mounted) {
+      _triedOtherCategory = true;
+      final from = _category.toUpperCase();
+      _category = _category == 'dub' ? 'sub' : 'dub';
+      setState(() => _phase = 'No $from found — trying ${_category.toUpperCase()}…');
+      await _resolveForCategory();
+      if (mounted && _failedAll) {
+        setState(() => _phase = 'No streams available ($from and ${_category.toUpperCase()} both failed)');
+      }
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _resolving = false;
       _failedAll = true;
-      _phase = 'No streams available';
+      _phase = message;
       _statusLine = '';
     });
   }
@@ -221,8 +235,8 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
     try {
       final direct = await _service.extractDirect(embed);
       if (direct == null || direct.url.isEmpty) {
-        _failReasons[embed.displayName] =
-            _service.extractErrors[embed.url] ?? "didn't return a video link";
+        _failReasons.add(
+            '${embed.displayName}: ${_service.extractErrors[embed.url] ?? "didn't return a video link"}');
         return null;
       }
       final headers = <String, String>{
@@ -258,7 +272,7 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
       );
     } catch (e) {
       debugPrint('[AnimePlayer] ${embed.displayName} failed: $e');
-      _failReasons[embed.displayName] = '$e';
+      _failReasons.add('${embed.displayName}: $e');
       return null;
     }
   }
@@ -381,11 +395,11 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
                   ],
                   if (_failedAll && _failReasons.isNotEmpty) ...[
                     const SizedBox(height: 12),
-                    for (final e in _failReasons.entries)
+                    for (final line in _failReasons.take(14))
                       Padding(
                         padding: const EdgeInsets.only(top: 3),
                         child: Text(
-                          '${e.key}: ${e.value.length > 90 ? '${e.value.substring(0, 90)}…' : e.value}',
+                          line.length > 140 ? '${line.substring(0, 140)}…' : line,
                           style: const TextStyle(color: Colors.white54, fontSize: 11),
                           textAlign: TextAlign.center,
                         ),
@@ -394,7 +408,11 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
                   if (_failedAll) ...[
                     const SizedBox(height: 22),
                     TextButton.icon(
-                      onPressed: _resolveForCategory,
+                      onPressed: () {
+                        _triedOtherCategory = false;
+                        _failReasons.clear();
+                        _resolveForCategory();
+                      },
                       icon: const Icon(Icons.refresh, size: 16),
                       label: const Text('Retry'),
                       style: TextButton.styleFrom(foregroundColor: theme.primaryColor),

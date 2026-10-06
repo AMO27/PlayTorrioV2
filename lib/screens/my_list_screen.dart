@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/my_list_service.dart';
@@ -177,10 +178,14 @@ class _MyListScreenState extends State<MyListScreen> {
                       onRemove: () async {
                         await _myList.remove(item['uniqueId']);
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          final messenger = ScaffoldMessenger.of(context);
+                          messenger.clearSnackBars();
+                          final bar = messenger.showSnackBar(
                             SnackBar(
                               content: Text('Removed "${item['title']}" from My List'),
-                              duration: const Duration(seconds: 2),
+                              // A snackbar with an action never auto-closes in
+                              // newer Flutter, so it's closed by the timer below.
+                              duration: const Duration(seconds: 5),
                               action: SnackBarAction(
                                 label: 'UNDO',
                                 onPressed: () {
@@ -209,6 +214,7 @@ class _MyListScreenState extends State<MyListScreen> {
                               ),
                             ),
                           );
+                          Timer(const Duration(seconds: 5), bar.close);
                         }
                       },
                     );

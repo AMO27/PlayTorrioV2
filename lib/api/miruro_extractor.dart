@@ -38,6 +38,10 @@ class MiruroExtractor {
   /// parallel per-provider extracts share a single network call.
   final Map<int, Future<Map<String, dynamic>?>> _epsCache = {};
 
+  /// Why the last attempt failed, for the on-screen error list. Keys are
+  /// 'api' (the shared request) and '{provider}|{category}'.
+  final Map<String, String> notes = {};
+
   Future<Map<String, dynamic>?> _episodes(int anilistId) {
     return _epsCache.putIfAbsent(
       anilistId,
@@ -55,16 +59,28 @@ class MiruroExtractor {
     required String category,
     required String provider,
   }) async {
+    final key = '$provider|$category';
+    notes.remove(key);
     try {
       final epData = await _episodes(anilistId);
+      if (epData == null) {
+        notes[key] = notes['api'] ?? "couldn't load the episode list";
+        return null;
+      }
       final providersMap =
-          (epData?['providers'] as Map?)?.cast<String, dynamic>() ?? {};
+          (epData['providers'] as Map?)?.cast<String, dynamic>() ?? {};
       final prov = (providersMap[provider] as Map?)?.cast<String, dynamic>();
-      if (prov == null) return null;
+      if (prov == null) {
+        notes[key] = "no '$provider' server for this show";
+        return null;
+      }
 
       final eps = (prov['episodes'] as Map?)?.cast<String, dynamic>() ?? {};
       final list = eps[category] as List?;
-      if (list == null || list.isEmpty) return null;
+      if (list == null || list.isEmpty) {
+        notes[key] = "no $category episodes on '$provider'";
+        return null;
+      }
 
       Map<String, dynamic>? hit;
       for (final raw in list) {
@@ -75,10 +91,16 @@ class MiruroExtractor {
           break;
         }
       }
-      if (hit == null) return null;
+      if (hit == null) {
+        notes[key] = "episode $episodeNumber not on '$provider'";
+        return null;
+      }
 
       final epId = hit['id']?.toString();
-      if (epId == null || epId.isEmpty) return null;
+      if (epId == null || epId.isEmpty) {
+        notes[key] = 'episode has no id';
+        return null;
+      }
 
       final src = await _apiGet('sources', query: {
         'episodeId': epId,
@@ -86,7 +108,10 @@ class MiruroExtractor {
         'category': category,
         'anilistId': '$anilistId',
       });
-      if (src == null) return null;
+      if (src == null) {
+        notes[key] = notes['api'] ?? 'stream request failed';
+        return null;
+      }
 
       final streams = (src['streams'] as List?) ?? const [];
       Map<String, dynamic>? hls;
@@ -98,10 +123,16 @@ class MiruroExtractor {
           break;
         }
       }
-      if (hls == null) return null;
+      if (hls == null) {
+        notes[key] = 'server returned no stream';
+        return null;
+      }
 
       final url = (hls['url'] ?? '').toString();
-      if (url.isEmpty) return null;
+      if (url.isEmpty) {
+        notes[key] = 'server returned an empty link';
+        return null;
+      }
 
       final referer = (hls['referer'] as String?)?.trim().isNotEmpty == true
           ? hls['referer'] as String
@@ -135,6 +166,7 @@ class MiruroExtractor {
         provider: provider,
       );
     } catch (e) {
+      notes[key] = '$e';
       if (kDebugMode) {
         debugPrint('[Miruro] $provider failed: $e');
       }
@@ -166,6 +198,7 @@ class MiruroExtractor {
       ..set('Accept', 'application/json, text/plain, */*');
     final res = await req.close();
     if (res.statusCode != 200) {
+      notes['api'] = '$path request got HTTP ${res.statusCode}';
       if (kDebugMode) {
         debugPrint('[Miruro] $path HTTP ${res.statusCode}');
       }

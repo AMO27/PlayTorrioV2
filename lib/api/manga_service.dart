@@ -328,22 +328,31 @@ class MangaService {
         final chapterId = _extractChapterId(href);
         if (chapterId == null) continue;
 
-        // Use the link's visible text (skip svg/style noise), so the number is
-        // found whichever element the site puts it in.
-        final clone = a.clone(true);
-        for (final junk in clone.querySelectorAll('svg, style, script')) {
-          junk.remove();
-        }
-        var chapterName = clone.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (chapterName.contains('{') || chapterName.contains('.st0')) {
-          chapterName = '';
-          for (final span in a.querySelectorAll('span')) {
-            final t = span.text.trim();
-            if (t.isNotEmpty && !t.contains('{') && !t.contains('fill:')) {
-              chapterName = t;
-              break;
-            }
+        // Pick the one span that is the chapter label ("Chapter 12"). The
+        // link also holds extras ("Mag Version", "Last Read 2026-…") that
+        // must not end up in the title.
+        final labelRe = RegExp(r'^(chapter|chap|ch|episode|ep)\b\.?\s*\d',
+            caseSensitive: false);
+        String chapterName = '';
+        final texts = <String>[];
+        for (final span in a.querySelectorAll('span')) {
+          final t = span.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+          if (t.isEmpty || t.contains('{') || t.contains('.st0') || t.contains('fill:')) {
+            continue;
           }
+          texts.add(t);
+        }
+        for (final t in texts) {
+          if (labelRe.hasMatch(t)) {
+            chapterName = t;
+            break;
+          }
+        }
+        if (chapterName.isEmpty && texts.isNotEmpty) {
+          // No span starts with "Chapter N": take the first one holding a number.
+          chapterName = texts.firstWhere(
+              (t) => RegExp(r'\d').hasMatch(t) && !t.toLowerCase().contains('last read'),
+              orElse: () => texts.first);
         }
 
         if (chapterName.isNotEmpty) {

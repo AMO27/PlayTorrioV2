@@ -647,16 +647,8 @@ class AnimeService {
           url: _embed(host: 'megaplay.buzz', anilistId: anilistId, episode: episode, category: 'sub', embedId: embedId)!,
         ),
         AnimeEmbed(
-          label: 'HD-2', server: 'vidwish', category: 'sub',
-          url: _embed(host: 'vidwish.live', anilistId: anilistId, episode: episode, category: 'sub', embedId: embedId)!,
-        ),
-        AnimeEmbed(
           label: 'HD-1', server: 'megaplay', category: 'dub',
           url: _embed(host: 'megaplay.buzz', anilistId: anilistId, episode: episode, category: 'dub', embedId: embedId)!,
-        ),
-        AnimeEmbed(
-          label: 'HD-2', server: 'vidwish', category: 'dub',
-          url: _embed(host: 'vidwish.live', anilistId: anilistId, episode: episode, category: 'dub', embedId: embedId)!,
         ),
       ]);
     }
@@ -792,10 +784,38 @@ class AnimeService {
       }
       final body = await apiRes.transform(utf8.decoder).join();
       final json = jsonDecode(body);
-      final file = (json['sources'] is Map ? json['sources']['file'] : null)
-          as String?;
+      // The site has changed this shape before: accept {sources:{file}},
+      // {sources:[{file}]}, a bare string, and url/link keys.
+      String? file;
+      final srcs = json is Map ? json['sources'] : null;
+      String? pick(dynamic m) {
+        if (m is String && m.startsWith('http')) return m;
+        if (m is Map) {
+          for (final k in const ['file', 'url', 'link', 'src']) {
+            final v = m[k];
+            if (v is String && v.isNotEmpty) return v;
+          }
+        }
+        return null;
+      }
+      if (srcs is List) {
+        for (final e in srcs) {
+          file = pick(e);
+          if (file != null) break;
+        }
+      } else {
+        file = pick(srcs);
+      }
+      if (file == null && json is Map) file = pick(json);
       if (file == null || file.isEmpty) {
-        extractErrors[embed.url] = 'site returned no video link';
+        if (json is Map && json['enc'] != null) {
+          extractErrors[embed.url] =
+              'site now sends the video link encrypted (enc) — needs its decryption key';
+          return null;
+        }
+        final snippet = body.replaceAll(RegExp(r'\s+'), ' ');
+        extractErrors[embed.url] = 'site returned no video link — it said: '
+            '${snippet.length > 100 ? '${snippet.substring(0, 100)}…' : snippet}';
         if (kDebugMode) debugPrint('[extractDirect] no sources.file');
         return null;
       }
@@ -851,7 +871,11 @@ class AnimeService {
       category: cat,
       provider: provider,
     );
-    if (res == null) return null;
+    if (res == null) {
+      extractErrors[embed.url] =
+          _miruro.notes['$provider|$cat'] ?? 'no stream returned';
+      return null;
+    }
 
     return AnimeStreamResult(
       url: res.url,
@@ -896,7 +920,11 @@ class AnimeService {
       category: cat,
       provider: provider,
     );
-    if (res == null) return null;
+    if (res == null) {
+      extractErrors[embed.url] =
+          _allanime.notes['$provider|$cat'] ?? 'no stream returned';
+      return null;
+    }
 
     return AnimeStreamResult(
       url: res.url,
