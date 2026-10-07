@@ -62,7 +62,7 @@ class _GamesLibraryTabState extends State<GamesLibraryTab>
       dialogTitle: 'Choose the file that starts ${g.name}',
       type: FileType.custom,
       allowedExtensions: const ['exe', 'lnk', 'bat', 'cmd', 'msi'],
-      initialDirectory: task?.dir,
+      initialDirectory: (task?.extractState == 'done' ? task?.extractDir : null) ?? task?.dir,
     );
     final path = result?.files.single.path;
     if (path == null) return null;

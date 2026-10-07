@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'game_extractor.dart';
 
 enum DlState { downloading, downloaded, failed }
 
@@ -22,6 +23,12 @@ class DownloadTask {
   int pieces = 1;
   double speed = 0; // bytes per second, smoothed
   String? libraryId;
+
+  /// Zip downloads are unpacked into their own folder, owned by the app.
+  /// extractState: null (not a zip), 'extracting', 'done' or 'failed'.
+  String? extractDir;
+  String? extractState;
+  String? extractError;
 
   // Kept in memory only (never written to disk).
   Map<String, String> headers = {};
@@ -62,6 +69,9 @@ class DownloadTask {
         'supportsRange': supportsRange,
         'pieces': pieces,
         'libraryId': libraryId,
+        'extractDir': extractDir,
+        'extractState': extractState,
+        'extractError': extractError,
       };
 
   static DownloadTask? fromJson(Object? j) {
@@ -80,6 +90,9 @@ class DownloadTask {
       t.supportsRange = j['supportsRange'] == true;
       t.pieces = (j['pieces'] as num?)?.toInt() ?? 1;
       t.libraryId = j['libraryId']?.toString();
+      t.extractDir = j['extractDir']?.toString();
+      t.extractState = j['extractState']?.toString();
+      t.extractError = j['extractError']?.toString();
       return t;
     } catch (_) {
       return null;
@@ -154,6 +167,10 @@ class DownloadManager extends ChangeNotifier {
               // The app closed mid-download: keep the partial file, offer Retry.
               t.state = DlState.failed;
               t.error = 'Interrupted. Retry continues where it stopped.';
+            }
+            if (t.extractState == 'extracting') {
+              t.extractState = 'failed';
+              t.extractError = 'Interrupted while unpacking. Tap "Unpack again".';
             }
             t.received = _partsOnDisk(t);
             tasks.add(t);
@@ -273,6 +290,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Removes the task from the list (and partial files when not finished).
+  /// With [deleteFile] a finished download is deleted from disk too: the
+  /// downloaded file and, for zips, the folder the app unpacked it into.
   Future<void> remove(String id, {bool deleteFile = false}) async {
     final t = byId(id);
     if (t == null) return;
@@ -281,10 +300,88 @@ class DownloadManager extends ChangeNotifier {
       await _deleteParts(t);
     } else if (deleteFile) {
       try {
-        await File(t.path).delete();
+        final f = File(t.path);
+        if (await f.exists()) await f.delete();
       } catch (_) {}
+      await _deleteExtractDir(t);
     }
     tasks.remove(t);
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Deletes the folder this app unpacked the zip into. It only ever
+  /// deletes a folder created directly inside the download folder.
+  Future<void> _deleteExtractDir(DownloadTask t) async {
+    final d = t.extractDir;
+    if (d == null) return;
+    try {
+      final root = p.canonicalize(t.dir);
+      final target = p.canonicalize(d);
+      if (target != root && p.isWithin(root, target)) {
+        final dir = Directory(d);
+        if (await dir.exists()) await dir.delete(recursive: true);
+      }
+    } catch (_) {}
+  }
+
+  /// Whether [path] lies inside this task's unpacked game folder.
+  bool isInsideExtractDir(DownloadTask t, String path) {
+    final d = t.extractDir;
+    if (d == null) return false;
+    return p.isWithin(p.canonicalize(d), p.canonicalize(path));
+  }
+
+  // ── Unpacking ─────────────────────────────────────────────────────────
+
+  String _uniqueDir(String dir, String stem) {
+    var candidate = p.join(dir, stem);
+    var n = 1;
+    bool taken(String c) =>
+        Directory(c).existsSync() ||
+        File(c).existsSync() ||
+        tasks.any((x) => x.extractDir == c);
+    while (taken(candidate)) {
+      candidate = p.join(dir, '$stem ($n)');
+      n++;
+    }
+    return candidate;
+  }
+
+  /// Unpacks a finished .zip download into its own new folder (Windows).
+  Future<void> extract(String id) async {
+    final t = byId(id);
+    if (t == null) return;
+    await _maybeExtract(t);
+  }
+
+  Future<void> _maybeExtract(DownloadTask t) async {
+    if (!Platform.isWindows) return;
+    if (t.state != DlState.downloaded) return;
+    if (p.extension(t.fileName).toLowerCase() != '.zip') return;
+    if (t.extractState == 'extracting') return;
+
+    // A retry first removes our own half-unpacked folder; a first run picks
+    // a folder name that does not exist yet, so nothing is ever overwritten.
+    if (t.extractDir != null) {
+      await _deleteExtractDir(t);
+    } else {
+      t.extractDir = _uniqueDir(t.dir, p.basenameWithoutExtension(t.fileName));
+    }
+    final dest = t.extractDir!;
+    t.extractState = 'extracting';
+    t.extractError = null;
+    notifyListeners();
+    await _persist();
+    try {
+      await extractZipSafely(t.path, dest);
+      t.extractState = 'done';
+    } catch (e) {
+      t.extractState = 'failed';
+      t.extractError = e.toString();
+      await _deleteExtractDir(t);
+      t.extractDir = null; // a retry picks a fresh, unused folder name
+    }
     await _persist();
     notifyListeners();
   }
@@ -452,6 +549,7 @@ class DownloadManager extends ChangeNotifier {
       t.state = DlState.downloaded;
       t.error = null;
       t.speed = 0;
+      unawaited(_maybeExtract(t));
     } catch (e) {
       ctl.ticker?.cancel();
       if (ctl.cancelled) return;

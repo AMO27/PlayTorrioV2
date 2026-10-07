@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 import '../../api/game_downloader.dart';
+import '../../api/game_library.dart';
 
 String fmtBytes(num b) {
   if (b < 0) return '?';
@@ -27,7 +28,10 @@ String fmtEta(Duration? d) {
 
 Future<void> openDownloadFolder(DownloadTask t) async {
   try {
-    await launchUrl(Uri.directory(t.dir), mode: LaunchMode.externalApplication);
+    final dir = t.extractState == 'done' && t.extractDir != null
+        ? t.extractDir!
+        : t.dir;
+    await launchUrl(Uri.directory(dir), mode: LaunchMode.externalApplication);
   } catch (_) {}
 }
 
@@ -37,18 +41,22 @@ Future<void> launchDownloaded(DownloadTask t) async {
   } catch (_) {}
 }
 
-/// Deletes the downloaded file from disk after a confirmation. If the file
-/// was a zip/installer that was already extracted or installed elsewhere,
-/// that copy stays (uninstall it from Windows Settings > Apps).
+/// Deletes a downloaded game from disk after a confirmation: the downloaded
+/// file and, for zips, the folder the app unpacked it into. Nothing outside
+/// the download folder is touched. A game you installed yourself with an
+/// installer (.exe / .msi) is not removed; uninstall it from Windows
+/// Settings > Apps.
 Future<bool> confirmDeleteDownload(BuildContext context, DownloadTask t) async {
+  final hasFolder = t.extractDir != null && t.extractState == 'done';
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Delete the downloaded file?'),
-      content: Text(
-          '${t.path}\n\nThis deletes the file from your computer. If you already '
-          'extracted or installed the game, that copy is not touched; uninstall '
-          'it from Windows Settings > Apps.'),
+      title: Text(hasFolder ? 'Delete this game?' : 'Delete the downloaded file?'),
+      content: Text(hasFolder
+          ? 'This permanently deletes:\n\n${t.path}\n${t.extractDir}\n\n'
+              'Your Library entry stays.'
+          : '${t.path}\n\nThis permanently deletes the file. If you installed '
+              'the game with it, uninstall that from Windows Settings > Apps.'),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -56,12 +64,20 @@ Future<bool> confirmDeleteDownload(BuildContext context, DownloadTask t) async {
         TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            child: const Text('Delete file')),
+            child: Text(hasFolder ? 'Delete game' : 'Delete file')),
       ],
     ),
   );
   if (ok != true) return false;
-  await DownloadManager.instance.remove(t.id, deleteFile: true);
+  final mgr = DownloadManager.instance;
+  // Forget saved game files that are about to disappear.
+  for (final g in GameLibrary.instance.games) {
+    final lp = g.launchPath;
+    if (lp != null && (lp == t.path || mgr.isInsideExtractDir(t, lp))) {
+      await GameLibrary.instance.setLaunchPath(g, null);
+    }
+  }
+  await mgr.remove(t.id, deleteFile: true);
   return true;
 }
 
@@ -132,33 +148,78 @@ class DownloadStatusView extends StatelessWidget {
           ],
         );
       case DlState.downloaded:
-        return Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        final hasFolder = t.extractDir != null && t.extractState == 'done';
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _chip('Downloaded', Colors.greenAccent.shade400),
-            Text(fmtBytes(t.total),
-                style: const TextStyle(color: Colors.white54, fontSize: 11)),
-            if (Platform.isWindows)
-              TextButton.icon(
-                onPressed: () => openDownloadFolder(t),
-                icon: const Icon(Icons.folder_open, size: 16),
-                label: const Text('Open folder'),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _chip('Downloaded', Colors.greenAccent.shade400),
+                Text(fmtBytes(t.total),
+                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                if (t.extractState == 'extracting')
+                  _chip('Unpacking…', Colors.blueAccent),
+                if (t.extractState == 'failed')
+                  _chip('Unpack failed', Colors.redAccent),
+                if (hasFolder) _chip('Unpacked', Colors.greenAccent.shade400),
+              ],
+            ),
+            if (t.extractState == 'extracting')
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: LinearProgressIndicator(minHeight: 4),
               ),
-            if (Platform.isWindows)
-              TextButton.icon(
-                onPressed: () => confirmDeleteDownload(context, t),
-                icon: const Icon(Icons.delete_outline, size: 16),
-                label: const Text('Delete file'),
-                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            if (t.extractState == 'failed' && (t.extractError ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(t.extractError!,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
               ),
-            if (Platform.isWindows && t.isInstaller)
-              TextButton.icon(
-                onPressed: () => launchDownloaded(t),
-                icon: const Icon(Icons.play_arrow, size: 16),
-                label: Text('Launch ${p.extension(t.fileName).toLowerCase()}'),
-              ),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (Platform.isWindows)
+                  TextButton.icon(
+                    onPressed: () => openDownloadFolder(t),
+                    icon: const Icon(Icons.folder_open, size: 16),
+                    label: Text(hasFolder ? 'Open game folder' : 'Open folder'),
+                  ),
+                if (Platform.isWindows &&
+                    t.extractState == null &&
+                    p.extension(t.fileName).toLowerCase() == '.zip')
+                  TextButton.icon(
+                    onPressed: () => DownloadManager.instance.extract(t.id),
+                    icon: const Icon(Icons.unarchive_outlined, size: 16),
+                    label: const Text('Unpack'),
+                  ),
+                if (Platform.isWindows && t.extractState == 'failed')
+                  TextButton.icon(
+                    onPressed: () => DownloadManager.instance.extract(t.id),
+                    icon: const Icon(Icons.unarchive_outlined, size: 16),
+                    label: const Text('Unpack again'),
+                  ),
+                if (Platform.isWindows && t.extractState != 'extracting')
+                  TextButton.icon(
+                    onPressed: () => confirmDeleteDownload(context, t),
+                    icon: const Icon(Icons.delete_outline, size: 16),
+                    label: Text(hasFolder ? 'Delete game' : 'Delete file'),
+                    style:
+                        TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                  ),
+                if (Platform.isWindows && t.isInstaller)
+                  TextButton.icon(
+                    onPressed: () => launchDownloaded(t),
+                    icon: const Icon(Icons.play_arrow, size: 16),
+                    label:
+                        Text('Launch ${p.extension(t.fileName).toLowerCase()}'),
+                  ),
+              ],
+            ),
           ],
         );
       case DlState.failed:
