@@ -144,7 +144,8 @@ class GameLibrary extends ChangeNotifier {
 
   /// A download was started for [name]: reuse the entry if the game is
   /// already in the Library, otherwise add it as "Want to play".
-  Future<LibraryGame> attachDownload(String name, String taskId) async {
+  Future<LibraryGame> attachDownload(String name, String taskId,
+      {String? cover, String? description, String? platform}) async {
     var g = findByName(name);
     if (g == null) {
       g = LibraryGame(
@@ -152,6 +153,12 @@ class GameLibrary extends ChangeNotifier {
           name: name.trim());
       games.insert(0, g);
     }
+    // Fill in only what is missing; never overwrite what is already there.
+    if ((g.cover ?? '').isEmpty && (cover ?? '').isNotEmpty) g.cover = cover;
+    if (g.description.isEmpty && (description ?? '').isNotEmpty) {
+      g.description = description!;
+    }
+    if (g.platform.isEmpty && (platform ?? '').isNotEmpty) g.platform = platform!;
     g.downloadTaskId = taskId;
     await _save();
     return g;

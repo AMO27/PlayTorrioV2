@@ -48,17 +48,22 @@ workflow when you want one) so a push never starts a build by surprise.
   Launch button (for .exe/.msi downloads directly; for others, pick the game's
   .exe once with "Choose game file" and it is remembered). Launching moves the
   game to "Playing".
-- **Zip downloads are unpacked by the app** into their own folder next to the
-  zip (`PlayTorrio Games/<name>/`), never over an existing folder. Unpacking
-  runs in the background and refuses unsafe zips: paths that escape the
-  folder, Windows device names, symbolic links, and zip bombs (more than
-  100,000 files or 100 GB). Nothing in the zip is ever run. Executable-type
-  files keep the Windows "downloaded from the internet" mark so SmartScreen
-  still asks before they run. Zip only (not .7z / .rar).
-- **"Delete game"** removes the downloaded zip and the folder the app unpacked
-  (only a folder it created inside the download folder; your Library entry
-  stays). For a game you installed with an installer, "Delete file" removes the
-  installer only; uninstall the game from Windows Settings > Apps.
+- **No built-in unpacking.** The app no longer unpacks downloads (it failed on
+  some itch.io files that WinRAR opens fine). Archives (.zip / .7z / .rar) get
+  an "Open archive" button that opens them in WinRAR, 7-Zip or whatever your
+  PC uses. Then pick the game's .exe once with "Choose game file" in the
+  Library.
+- **Real game name, picture and description.** The download dialog now shows
+  the game's real name (read from the page the download started on, with a
+  close Steam match as a fallback) and the Library shows its cover, name and
+  description. File names like `attachment; filename="Forgetmenot-1.0-pc"` are
+  cleaned up, and files sent without an extension get the right one
+  (.zip / .exe / .7z / .rar) from their first bytes.
+- **"Download in browser"** button on a failed download opens the game's page
+  in your normal browser.
+- **"Delete file"** removes the downloaded file only. A folder you unpacked or
+  a game you installed stays; uninstall installed games from Windows Settings
+  > Apps.
 - **Build note:** the in-app browser package was bumped to
   `flutter_inappwebview ^6.2.0-beta.3`. Download interception on Windows
   only exists in that version.

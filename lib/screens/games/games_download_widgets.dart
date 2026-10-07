@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -28,12 +29,39 @@ String fmtEta(Duration? d) {
 
 Future<void> openDownloadFolder(DownloadTask t) async {
   try {
-    final dir = t.extractState == 'done' && t.extractDir != null
-        ? t.extractDir!
-        : t.dir;
-    await launchUrl(Uri.directory(dir), mode: LaunchMode.externalApplication);
+    await launchUrl(Uri.directory(t.dir), mode: LaunchMode.externalApplication);
   } catch (_) {}
 }
+
+/// Sends the user to the page in their normal browser, where the site's own
+/// download works with their sign-in.
+Future<void> openInBrowser(BuildContext context, DownloadTask t) async {
+  final target = t.sourcePage ?? t.url;
+  final m = ScaffoldMessenger.of(context);
+  m.hideCurrentSnackBar();
+  final c = m.showSnackBar(const SnackBar(
+      content: Text('Sending you to your browser…'),
+      duration: Duration(seconds: 3)));
+  Timer(const Duration(seconds: 3), () {
+    try {
+      c.close();
+    } catch (_) {}
+  });
+  try {
+    await launchUrl(Uri.parse(target), mode: LaunchMode.externalApplication);
+  } catch (_) {}
+}
+
+/// Opens an archive (.zip / .7z / .rar) with the app Windows uses for it,
+/// such as WinRAR or 7-Zip.
+Future<void> openArchive(DownloadTask t) async {
+  try {
+    await launchUrl(Uri.file(t.path), mode: LaunchMode.externalApplication);
+  } catch (_) {}
+}
+
+bool isArchiveName(String name) => const {'.zip', '.7z', '.rar'}
+    .contains(p.extension(name).toLowerCase());
 
 Future<void> launchDownloaded(DownloadTask t) async {
   try {
@@ -41,22 +69,17 @@ Future<void> launchDownloaded(DownloadTask t) async {
   } catch (_) {}
 }
 
-/// Deletes a downloaded game from disk after a confirmation: the downloaded
-/// file and, for zips, the folder the app unpacked it into. Nothing outside
-/// the download folder is touched. A game you installed yourself with an
-/// installer (.exe / .msi) is not removed; uninstall it from Windows
-/// Settings > Apps.
+/// Deletes the downloaded file after a confirmation. Anything you unpacked
+/// yourself, or installed, is not touched: delete that folder yourself, or
+/// uninstall the game from Windows Settings > Apps.
 Future<bool> confirmDeleteDownload(BuildContext context, DownloadTask t) async {
-  final hasFolder = t.extractDir != null && t.extractState == 'done';
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text(hasFolder ? 'Delete this game?' : 'Delete the downloaded file?'),
-      content: Text(hasFolder
-          ? 'This permanently deletes:\n\n${t.path}\n${t.extractDir}\n\n'
-              'Your Library entry stays.'
-          : '${t.path}\n\nThis permanently deletes the file. If you installed '
-              'the game with it, uninstall that from Windows Settings > Apps.'),
+      title: const Text('Delete the downloaded file?'),
+      content: Text('${t.path}\n\nThis permanently deletes the file only. A '
+          'folder you unpacked from it, or a game you installed with it, stays '
+          'where it is (uninstall installed games in Windows Settings > Apps).'),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -64,16 +87,14 @@ Future<bool> confirmDeleteDownload(BuildContext context, DownloadTask t) async {
         TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            child: Text(hasFolder ? 'Delete game' : 'Delete file')),
+            child: const Text('Delete file')),
       ],
     ),
   );
   if (ok != true) return false;
   final mgr = DownloadManager.instance;
-  // Forget saved game files that are about to disappear.
   for (final g in GameLibrary.instance.games) {
-    final lp = g.launchPath;
-    if (lp != null && (lp == t.path || mgr.isInsideExtractDir(t, lp))) {
+    if (g.launchPath != null && g.launchPath == t.path) {
       await GameLibrary.instance.setLaunchPath(g, null);
     }
   }
@@ -148,7 +169,6 @@ class DownloadStatusView extends StatelessWidget {
           ],
         );
       case DlState.downloaded:
-        final hasFolder = t.extractDir != null && t.extractState == 'done';
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -160,26 +180,8 @@ class DownloadStatusView extends StatelessWidget {
                 _chip('Downloaded', Colors.greenAccent.shade400),
                 Text(fmtBytes(t.total),
                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                if (t.extractState == 'extracting')
-                  _chip('Unpacking…', Colors.blueAccent),
-                if (t.extractState == 'failed')
-                  _chip('Unpack failed', Colors.redAccent),
-                if (hasFolder) _chip('Unpacked', Colors.greenAccent.shade400),
               ],
             ),
-            if (t.extractState == 'extracting')
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: LinearProgressIndicator(minHeight: 4),
-              ),
-            if (t.extractState == 'failed' && (t.extractError ?? '').isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(t.extractError!,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
-              ),
             Wrap(
               spacing: 8,
               children: [
@@ -187,27 +189,19 @@ class DownloadStatusView extends StatelessWidget {
                   TextButton.icon(
                     onPressed: () => openDownloadFolder(t),
                     icon: const Icon(Icons.folder_open, size: 16),
-                    label: Text(hasFolder ? 'Open game folder' : 'Open folder'),
+                    label: const Text('Open folder'),
                   ),
-                if (Platform.isWindows &&
-                    t.extractState == null &&
-                    p.extension(t.fileName).toLowerCase() == '.zip')
+                if (Platform.isWindows && isArchiveName(t.fileName))
                   TextButton.icon(
-                    onPressed: () => DownloadManager.instance.extract(t.id),
+                    onPressed: () => openArchive(t),
                     icon: const Icon(Icons.unarchive_outlined, size: 16),
-                    label: const Text('Unpack'),
+                    label: const Text('Open archive'),
                   ),
-                if (Platform.isWindows && t.extractState == 'failed')
-                  TextButton.icon(
-                    onPressed: () => DownloadManager.instance.extract(t.id),
-                    icon: const Icon(Icons.unarchive_outlined, size: 16),
-                    label: const Text('Unpack again'),
-                  ),
-                if (Platform.isWindows && t.extractState != 'extracting')
+                if (Platform.isWindows)
                   TextButton.icon(
                     onPressed: () => confirmDeleteDownload(context, t),
                     icon: const Icon(Icons.delete_outline, size: 16),
-                    label: Text(hasFolder ? 'Delete game' : 'Delete file'),
+                    label: const Text('Delete file'),
                     style:
                         TextButton.styleFrom(foregroundColor: Colors.redAccent),
                   ),
@@ -236,6 +230,12 @@ class DownloadStatusView extends StatelessWidget {
                 icon: const Icon(Icons.refresh, size: 16),
                 label: Text(t.received > 0 ? 'Retry (resume)' : 'Retry'),
               ),
+              if (!cancelled)
+                TextButton.icon(
+                  onPressed: () => openInBrowser(context, t),
+                  icon: const Icon(Icons.open_in_browser, size: 16),
+                  label: const Text('Download in browser'),
+                ),
             ]),
             if (!cancelled && (t.error ?? '').isNotEmpty)
               Text(t.error!,

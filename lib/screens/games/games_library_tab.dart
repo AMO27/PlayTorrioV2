@@ -62,7 +62,7 @@ class _GamesLibraryTabState extends State<GamesLibraryTab>
       dialogTitle: 'Choose the file that starts ${g.name}',
       type: FileType.custom,
       allowedExtensions: const ['exe', 'lnk', 'bat', 'cmd', 'msi'],
-      initialDirectory: (task?.extractState == 'done' ? task?.extractDir : null) ?? task?.dir,
+      initialDirectory: task?.dir,
     );
     final path = result?.files.single.path;
     if (path == null) return null;
@@ -252,6 +252,14 @@ class _GamesLibraryTabState extends State<GamesLibraryTab>
                         ].join(' · '),
                         style: const TextStyle(
                             color: Colors.white54, fontSize: 12)),
+                    if (g.description.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(g.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white60, fontSize: 12)),
+                    ],
                     const SizedBox(height: 6),
                     Row(
                       children: [

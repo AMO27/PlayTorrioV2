@@ -2,9 +2,9 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:path/path.dart' as p;
 import '../../api/game_downloader.dart';
 import '../../api/game_library.dart';
+import '../../api/game_meta.dart';
 import 'games_download_widgets.dart';
 import 'games_sites_tab.dart';
 import 'saved_sites_store.dart';
@@ -43,21 +43,14 @@ class _GamesDownloadTabState extends State<GamesDownloadTab>
     GameLibrary.instance.load();
   }
 
-  /// "Some_Game-v1.2.zip" -> "Some Game v1.2"
-  String _guessGameName(String file) {
-    var n = p.basenameWithoutExtension(file);
-    if (n.toLowerCase().endsWith('.tar')) n = p.basenameWithoutExtension(n);
-    n = n.replaceAll(RegExp(r'[_]+'), ' ').trim();
-    return n.isEmpty ? file : n;
-  }
-
   Future<void> _onDownload(
       DownloadStartRequest req, Map<String, String> headers) async {
     if (!mounted || _asking) return;
     _asking = true;
     try {
       final url = req.url.toString();
-      var fileName = (req.suggestedFilename ?? '').trim();
+      var fileName = GameMetaResolver.parseFileName(
+          req.contentDisposition, req.suggestedFilename);
       if (fileName.isEmpty) {
         final seg = req.url.pathSegments.where((s) => s.isNotEmpty).toList();
         fileName = seg.isEmpty ? 'download' : Uri.decodeComponent(seg.last);
@@ -65,7 +58,15 @@ class _GamesDownloadTabState extends State<GamesDownloadTab>
       var dir = await _mgr.downloadDir();
       if (!mounted) return;
 
-      final nameCtrl = TextEditingController(text: _guessGameName(fileName));
+      // Look up the game's real name, picture and description (short wait).
+      final sourcePage = headers['Referer'] ?? '';
+      final meta = await GameMetaResolver.resolve(
+              pageUrl: sourcePage, fileName: fileName)
+          .timeout(const Duration(seconds: 8), onTimeout: () => GameMeta.empty);
+      if (!mounted) return;
+      final niceName = meta.title ?? GameMetaResolver.nameFromFileName(fileName);
+
+      final nameCtrl = TextEditingController(text: niceName);
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => StatefulBuilder(
@@ -141,9 +142,11 @@ class _GamesDownloadTabState extends State<GamesDownloadTab>
         dir: dir,
         total: req.contentLength > 0 ? req.contentLength : -1,
         headers: headers,
+        sourcePage: sourcePage.isEmpty ? null : sourcePage,
       );
       final lib = await GameLibrary.instance.attachDownload(
-          gameName.isEmpty ? _guessGameName(fileName) : gameName, task.id);
+          gameName.isEmpty ? niceName : gameName, task.id,
+          cover: meta.image, description: meta.description, platform: 'PC');
       task.libraryId = lib.id;
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
