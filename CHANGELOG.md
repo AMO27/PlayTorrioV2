@@ -14,6 +14,20 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-08
+
+### Books
+- **Book search says why it failed** instead of showing an empty page. The
+  message names the real reason (for example "libgen.li answered HTTP 403" or
+  "showed a bot check") and has **Retry** and **Open in browser** buttons.
+- **Backup addresses.** If the main book catalog address doesn't answer, the
+  search tries its mirrors (libgen.bz, .gs, .la, .vg) and keeps using the one
+  that works.
+- **Searching the same words again works** after a failed or empty search
+  (before, it was ignored).
+- The result reader finds columns by the position of the title, so a small
+  change in the site's layout no longer hides every result.
+
 ## 2026-10-06
 
 ### Games (new section)

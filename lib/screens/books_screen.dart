@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import '../api/books_service.dart';
 import '../services/book_progress_service.dart';
 import '../utils/app_theme.dart';
@@ -22,6 +23,7 @@ class _BooksScreenState extends State<BooksScreen> {
   bool _isLoading = false;
   bool _hasSearched = false;
   String _lastQuery = '';
+  String? _error;
 
   // ── Continue-reading state ─────────────────────────────────────────────────
   List<BookProgress> _reading = [];
@@ -48,20 +50,33 @@ class _BooksScreenState extends State<BooksScreen> {
 
   Future<void> _search(String query) async {
     query = query.trim();
-    if (query.isEmpty || query == _lastQuery) return;
+    if (query.isEmpty) return;
+    // Same text again re-runs the search only when the last one found nothing
+    // or failed (so Retry works), not while results are on screen.
+    if (query == _lastQuery && _results.isNotEmpty && _error == null) return;
 
     setState(() {
       _isLoading = true;
       _hasSearched = true;
       _lastQuery = query;
       _results = [];
+      _error = null;
     });
 
-    final results = await _service.search(query);
+    List<BookResult> results = [];
+    String? error;
+    try {
+      results = await _service.search(query);
+    } on BooksSearchException catch (e) {
+      error = e.message;
+    } catch (e) {
+      error = e.toString();
+    }
 
     if (mounted) {
       setState(() {
         _results = results;
+        _error = error;
         _isLoading = false;
       });
       if (_scrollController.hasClients) {
@@ -269,6 +284,48 @@ class _BooksScreenState extends State<BooksScreen> {
             Text('Searching LibGen…',
                 style: TextStyle(color: Colors.white54, fontSize: 14)),
           ],
+        ),
+      );
+    }
+
+    if (_hasSearched && _error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_rounded,
+                  size: 64, color: Colors.white24),
+              const SizedBox(height: 16),
+              const Text("Couldn't reach the book catalog",
+                  style: TextStyle(color: Colors.white70, fontSize: 16)),
+              const SizedBox(height: 8),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  maxLines: 5,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () => _search(_lastQuery),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Retry'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => launchUrl(
+                        Uri.parse(BooksService.searchPageUrl(_lastQuery)),
+                        mode: LaunchMode.externalApplication),
+                    icon: const Icon(Icons.open_in_browser, size: 18),
+                    label: const Text('Open in browser'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       );
     }

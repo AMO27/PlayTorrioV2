@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as hp;
 import 'package:flutter/foundation.dart';
@@ -98,122 +99,174 @@ class BookEditionDetails {
 // Service
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Why a book search failed (shown to the user instead of "no results").
+class BooksSearchException implements Exception {
+  final String message;
+  BooksSearchException(this.message);
+  @override
+  String toString() => message;
+}
+
 class BooksService {
-  static const String _base = 'https://libgen.li';
+  /// Mirrors of the same catalog, tried in order. The one that answers last
+  /// is remembered and used for the edition / download steps too.
+  static const List<String> _mirrors = [
+    'https://libgen.li',
+    'https://libgen.bz',
+    'https://libgen.gs',
+    'https://libgen.la',
+    'https://libgen.vg',
+  ];
+  static String _base = _mirrors.first;
+
+  /// Public so the screen can offer "Open in browser".
+  static String searchPageUrl(String query) =>
+      '$_base/index.php?req=${Uri.encodeComponent(query)}&curtab=f';
 
   static final _client = http.Client();
 
   static const Map<String, String> _headers = {
     'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.5',
   };
 
   // ── Search ─────────────────────────────────────────────────────────────────
-  // Equivalent to: GET /libgen/search/:query
-  // Only returns epub files (mirrors the JS filter).
+  // Returns only epub files. Throws BooksSearchException with the real
+  // reason when no mirror could be read, so "nothing found" really means
+  // nothing was found.
 
   Future<List<BookResult>> search(String query) async {
     if (query.trim().isEmpty) return [];
-    try {
-      final url = Uri.parse(
-        '$_base/index.php?req=${Uri.encodeComponent(query)}&curtab=f',
-      );
-      debugPrint('[LibGen] search: $url');
-
-      final response = await _client.get(url, headers: _headers);
-      if (response.statusCode != 200) {
-        debugPrint('[LibGen] search HTTP ${response.statusCode}');
-        return [];
-      }
-
-      final document = hp.parse(response.body);
-      final results = <BookResult>[];
-
-      // libgen uses multiple table structures; select all tr
-      final rows = document.querySelectorAll('table tbody tr, table tr');
-
-      for (final row in rows) {
-        final tds = row.querySelectorAll('td');
-        if (tds.length < 8) continue;
-
-        final firstTd = tds[0];
-
-        // Title link — must have edition.php href
-        final titleLink = firstTd.querySelector('a[href*="edition.php"]');
-        if (titleLink == null) continue;
-
-        final title = titleLink.text.trim();
-        if (title.isEmpty) continue;
-
-        final editionHref = titleLink.attributes['href'] ?? '';
-        final editionIdMatch = RegExp(r'id=(\d+)').firstMatch(editionHref);
-        final editionId = editionIdMatch?.group(1);
-        if (editionId == null || editionId.isEmpty) continue;
-
-        final series = firstTd.querySelector('b')?.text.trim() ?? '';
-        final isbn =
-            firstTd.querySelector('font[color="green"]')?.text.trim() ?? '';
-        final fileId =
-            firstTd.querySelector('.badge-secondary')?.text.trim() ?? '';
-
-        final author    = tds[1].text.trim();
-        final publisher = tds[2].text.trim();
-        final year      = tds[3].text.trim();
-        final language  = tds[4].text.trim();
-        final pages     = tds[5].text.trim();
-
-        // size td may have a nested <a>
-        final sizeTd = tds[6];
-        final size = sizeTd.querySelector('a')?.text.trim().isNotEmpty == true
-            ? sizeTd.querySelector('a')!.text.trim()
-            : sizeTd.text.trim();
-
-        final format = tds[7].text.trim();
-
-        // Only epub
-        if (format.toLowerCase() != 'epub') continue;
-
-        // Download links from td[8] if present
-        final downloadLinks = <Map<String, String>>[];
-        if (tds.length > 8) {
-          final dlTd = tds[8];
-          for (final a in dlTd.querySelectorAll('a')) {
-            final href = a.attributes['href'] ?? '';
-            if (href.isEmpty) continue;
-            final linkTitle = a.attributes['data-original-title'] ??
-                a.querySelector('.badge')?.text.trim() ??
-                '';
-            downloadLinks.add({'title': linkTitle, 'href': href});
-          }
+    final problems = <String>[];
+    var anyPageRead = false;
+    for (final base in _mirrors) {
+      final host = Uri.parse(base).host;
+      try {
+        final url = Uri.parse(
+            '$base/index.php?req=${Uri.encodeComponent(query)}&curtab=f');
+        debugPrint('[LibGen] search: $url');
+        final response = await _client
+            .get(url, headers: _headers)
+            .timeout(const Duration(seconds: 20));
+        if (response.statusCode != 200) {
+          problems.add('$host answered HTTP ${response.statusCode}');
+          continue;
         }
+        final body = response.body;
+        final hasRows = body.contains('edition.php');
+        if (!hasRows) {
+          final lower = body.toLowerCase();
+          final botCheck = lower.contains('just a moment') ||
+              lower.contains('ddos-guard') ||
+              lower.contains('captcha') ||
+              lower.contains('cf-chl') ||
+              lower.contains('checking your browser');
+          if (botCheck) {
+            problems.add('$host showed a bot check');
+            continue;
+          }
+          // A real page with no results at all.
+          anyPageRead = true;
+          _base = base;
+          continue;
+        }
+        final results = _parseRows(body, base);
+        anyPageRead = true;
+        if (results.isNotEmpty) {
+          _base = base;
+          debugPrint('[LibGen] found ${results.length} epub results on $host');
+          return results;
+        }
+        // Rows exist but none is an epub (or the layout changed).
+        problems.add('$host had results but no EPUB files');
+        _base = base;
+      } on TimeoutException {
+        problems.add('$host timed out');
+      } catch (e) {
+        problems.add('$host: $e');
+      }
+    }
+    if (anyPageRead) return []; // a mirror answered: nothing to show
+    throw BooksSearchException(problems.join('; '));
+  }
 
-        results.add(BookResult(
-          title: title,
-          series: series,
-          author: author,
-          publisher: publisher,
-          year: year,
-          language: language,
-          pages: pages,
-          size: size,
-          format: format,
-          isbn: isbn,
-          editionId: editionId,
-          editionUrl: '$_base/edition.php?id=$editionId',
-          fileId: fileId,
-          downloadLinks: downloadLinks,
-        ));
+  /// Reads the result rows by position of the title cell, so a small layout
+  /// change (extra leading column) does not break the parser.
+  List<BookResult> _parseRows(String html, String base) {
+    final document = hp.parse(html);
+    final results = <BookResult>[];
+    final seen = <String>{};
+    for (final row in document.querySelectorAll('tr')) {
+      final tds = row.children.where((c) => c.localName == 'td').toList();
+      if (tds.length < 8) continue;
+      final ti = tds.indexWhere(
+          (td) => td.querySelector('a[href*="edition.php"]') != null);
+      if (ti < 0) continue;
+      final firstTd = tds[ti];
+      final titleLink = firstTd.querySelector('a[href*="edition.php"]')!;
+      final title = titleLink.text.trim();
+      if (title.isEmpty) continue;
+
+      final editionHref = titleLink.attributes['href'] ?? '';
+      final editionId = RegExp(r'id=(\d+)').firstMatch(editionHref)?.group(1);
+      if (editionId == null || editionId.isEmpty) continue;
+
+      // Columns after the title cell: author, publisher, year, language,
+      // pages, size, extension, mirrors.
+      String cell(int k) => ti + k < tds.length ? tds[ti + k].text.trim() : '';
+      final author = cell(1);
+      final publisher = cell(2);
+      final year = cell(3);
+      final language = cell(4);
+      final pages = cell(5);
+      final sizeTd = ti + 6 < tds.length ? tds[ti + 6] : null;
+      final size = (sizeTd?.querySelector('a')?.text.trim().isNotEmpty ?? false)
+          ? sizeTd!.querySelector('a')!.text.trim()
+          : (sizeTd?.text.trim() ?? '');
+      var format = cell(7).toLowerCase();
+      if (format != 'epub') {
+        // Layout shifted: accept an epub marker in any later cell.
+        final later = tds.skip(ti + 1).any((td) => td.text.trim().toLowerCase() == 'epub');
+        if (!later) continue;
+        format = 'epub';
+      }
+      if (!seen.add(editionId)) continue;
+
+      final series = firstTd.querySelector('b')?.text.trim() ?? '';
+      final isbn = firstTd.querySelector('font[color="green"]')?.text.trim() ?? '';
+      final fileId = firstTd.querySelector('.badge-secondary')?.text.trim() ?? '';
+
+      final downloadLinks = <Map<String, String>>[];
+      for (final a in tds.last.querySelectorAll('a')) {
+        final href = a.attributes['href'] ?? '';
+        if (href.isEmpty) continue;
+        final linkTitle = a.attributes['data-original-title'] ??
+            a.querySelector('.badge')?.text.trim() ??
+            '';
+        downloadLinks.add({'title': linkTitle, 'href': href});
       }
 
-      debugPrint('[LibGen] found ${results.length} epub results');
-      return results;
-    } catch (e, st) {
-      debugPrint('[LibGen] search error: $e\n$st');
-      return [];
+      results.add(BookResult(
+        title: title,
+        series: series,
+        author: author,
+        publisher: publisher,
+        year: year,
+        language: language,
+        pages: pages,
+        size: size,
+        format: format,
+        isbn: isbn,
+        editionId: editionId,
+        editionUrl: '$base/edition.php?id=$editionId',
+        fileId: fileId,
+        downloadLinks: downloadLinks,
+      ));
     }
+    return results;
   }
 
   // ── Edition details → MD5 ──────────────────────────────────────────────────
