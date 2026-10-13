@@ -396,6 +396,26 @@ class MusicService {
     }
   }
 
+  // Which YouTube identity produced a link decides which headers it will
+  // accept. Without matching headers the player gets refused ("link blocked").
+  static const _androidUa =
+      'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+  static const _iosUa =
+      'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)';
+  static const _vrUa =
+      'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1) gzip';
+  static const _browserUa =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  final Map<String, String> _uaByUrl = {};
+
+  /// Headers to open [url] with so YouTube treats it like the app that asked.
+  Map<String, String> playbackHeaders(String url) {
+    final ua = _uaByUrl[url] ??
+        YoutubeAudioExtractor.userAgentForUrl(url) ??
+        _browserUa;
+    return {'User-Agent': ua, 'Referer': 'https://www.youtube.com/'};
+  }
+
   void forgetStreamUrl(String videoId) => _streamUrlCache.remove(videoId);
 
   Future<String?> getYoutubeStreamUrl(String videoId, {bool skipFastPath = false}) async {
@@ -466,7 +486,7 @@ class MusicService {
     // moment) while trying the clients that don't need it.
     final solverFuture = _solverYt();
 
-    Future<String?> tryClient(YoutubeExplode yt, YoutubeApiClient client, String name) async {
+    Future<String?> tryClient(YoutubeExplode yt, YoutubeApiClient client, String name, String ua) async {
       try {
         final manifest = await yt.videos.streamsClient
             .getManifest(videoId, ytClients: [client])
@@ -478,7 +498,9 @@ class MusicService {
         }
         audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
         debugPrint('MusicService: Got stream URL via $name');
-        return audioStreams.first.url.toString();
+        final u = audioStreams.first.url.toString();
+        _uaByUrl[u] = ua;
+        return u;
       } catch (e) {
         debugPrint('MusicService: $name failed: $e');
         _noteFailure(name, e is TimeoutException ? 'timed out' : e);
@@ -490,9 +512,9 @@ class MusicService {
     // the VR client that worked before, and the iPhone client — all at once.
     if (!solverOnly) {
       final url = await _firstNonNullUrl([
-        tryClient(_yt, YoutubeApiClient.androidSdkless, 'Android client'),
-        tryClient(_yt, YoutubeApiClient.androidVr, 'VR client'),
-        tryClient(_yt, YoutubeApiClient.ios, 'iPhone client'),
+        tryClient(_yt, YoutubeApiClient.androidSdkless, 'Android client', _androidUa),
+        tryClient(_yt, YoutubeApiClient.androidVr, 'VR client', _vrUa),
+        tryClient(_yt, YoutubeApiClient.ios, 'iPhone client', _iosUa),
       ]);
       if (url != null) return url;
     }
@@ -504,8 +526,8 @@ class MusicService {
       return null;
     }
     return _firstNonNullUrl([
-      tryClient(solverYt, YoutubeApiClient.safari, 'Safari client'),
-      tryClient(solverYt, YoutubeApiClient.tv, 'TV client'),
+      tryClient(solverYt, YoutubeApiClient.safari, 'Safari client', _browserUa),
+      tryClient(solverYt, YoutubeApiClient.tv, 'TV client', 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version,gzip(gfe)'),
     ]);
   }
 

@@ -89,7 +89,34 @@ class YoutubeAudioExtractor {
         'gl': 'US',
       },
     ),
+    // Samsung smart-TV identity. yt-dlp made this a default client in Oct 2026
+    // after YouTube started refusing the phone/VR identities.
+    _YtClient(
+      key: 'tv_samsung',
+      id: '7',
+      version: '5.20260707',
+      userAgent:
+          'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+      context: {
+        'clientName': 'TVHTML5',
+        'clientVersion': '5.20260707',
+        'deviceMake': 'Samsung',
+        'deviceModel': 'UKS9800',
+        'osName': 'Tizen',
+        'osVersion': '2.4.0',
+        'userAgent':
+            'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+        'hl': 'en',
+        'gl': 'US',
+      },
+    ),
   ];
+
+  /// The User-Agent of the YouTube identity that produced each stream URL.
+  /// googlevideo links tend to be refused unless the player presents the same
+  /// identity, so the player asks for this before opening a link.
+  static final Map<String, String> _urlUserAgents = {};
+  static String? userAgentForUrl(String url) => _urlUserAgents[url];
 
   // --- State ---
   _CachedConfig? _config;
@@ -158,6 +185,8 @@ class YoutubeAudioExtractor {
         final best = _pickBestAudio(streamingData);
         if (best != null) {
           _streamCache[videoId] = _CachedStream(best.url, best.expiresAt);
+          _urlUserAgents[best.url] = client.userAgent;
+          _log('${client.key}: got audio link');
           return best.url;
         }
       } catch (e) {
@@ -186,6 +215,7 @@ class YoutubeAudioExtractor {
         final best = _pickBestAudio(streamingData);
         if (best != null) {
           _streamCache[videoId] = _CachedStream(best.url, best.expiresAt);
+          _urlUserAgents[best.url] = client.userAgent;
           return best.url;
         }
       } catch (_) {}

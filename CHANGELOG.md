@@ -14,6 +14,20 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-13
+
+### Music
+- **Songs open with the same identity that got the link.** YouTube started
+  refusing audio links opened with no headers ("link blocked for this
+  player"). The player now sends the matching User-Agent and Referer.
+- **Play from a saved file if streaming is refused.** The app saves the audio to
+  a temporary file and plays that, and the error message says when both ways
+  failed.
+- **Samsung smart-TV client added** to the built-in extractor, the same one
+  yt-dlp made its default on Oct 10.
+- **Windows build bundles yt-dlp nightly** instead of the last stable release
+  (2026.08.19), which doesn't have YouTube's latest fixes yet.
+
 ## 2026-10-08
 
 ### Books

@@ -49,10 +49,12 @@ jobs:
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - run: flutter build windows --release
       # yt-dlp is used by the music player to resolve YouTube audio streams.
+      # Uses yt-dlp's nightly builds: YouTube changes faster than stable
+      # releases, and fixes land in nightly first.
       - name: Bundle yt-dlp
         shell: pwsh
         run: |
-          $base = "https://github.com/yt-dlp/yt-dlp/releases/latest/download"
+          $base = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download"
           $out = "build/windows/x64/runner/Release/yt-dlp.exe"
           Invoke-WebRequest -Uri "$base/yt-dlp.exe" -OutFile $out
           # Verify the download against yt-dlp's own published checksum list,

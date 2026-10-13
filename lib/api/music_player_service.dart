@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -324,7 +326,8 @@ class MusicPlayerService {
         final preview = streamUrl.length > 120 ? '${streamUrl.substring(0, 120)}…' : streamUrl;
         debugPrint('MusicPlayerService: streamUrl=$preview');
 
-        final started = await _openAndVerify(streamUrl, generation);
+        final started = await _openAndVerify(streamUrl, generation,
+            headers: _musicService.playbackHeaders(streamUrl));
         if (_playGeneration != generation) return;
         if (started) {
           _consecutiveFailures = 0;
@@ -333,12 +336,28 @@ class MusicPlayerService {
           return;
         }
         debugPrint('MusicPlayerService: playback did not start on attempt ${attempt + 1}');
+        // Last resort for this attempt: save the audio to a temp file and play
+        // that. Saving songs uses the same kind of request and still works
+        // when streaming the link is refused.
+        final tmp = await _downloadToTemp(streamUrl, videoId, generation);
+        if (_playGeneration != generation) return;
+        if (tmp != null) {
+          final playedFile = await _openAndVerify(tmp, generation);
+          if (_playGeneration != generation) return;
+          if (playedFile) {
+            debugPrint('MusicPlayerService: playing from temp file');
+            _consecutiveFailures = 0;
+            _startFadeIn();
+            _prefetchNext();
+            return;
+          }
+        }
         _musicService.forgetStreamUrl(videoId);
       }
       final why = _musicService.lastFailureSummary;
       _failPlayback(generation,
           (gotLink
-              ? "Couldn't start playback — YouTube gave a link, but it wouldn't play (link blocked for this player)."
+              ? "Couldn't start playback — YouTube gave a link, but neither streaming it nor saving it first worked (link refused)."
               : "Couldn't start playback — YouTube didn't give any audio link.")
           + (why != null ? '\n$why' : ''));
 
@@ -353,9 +372,12 @@ class MusicPlayerService {
   }
 
   /// Opens [url] and waits (up to 20 s) for audio to actually start.
-  Future<bool> _openAndVerify(String url, int generation) async {
+  Future<bool> _openAndVerify(String url, int generation,
+      {Map<String, String>? headers}) async {
     try {
-      await _player.open(Media(url)).timeout(const Duration(seconds: 20));
+      await _player
+          .open(Media(url, httpHeaders: headers))
+          .timeout(const Duration(seconds: 20));
       final deadline = DateTime.now().add(const Duration(seconds: 20));
       while (DateTime.now().isBefore(deadline)) {
         if (_playGeneration != generation) return false;
@@ -366,6 +388,47 @@ class MusicPlayerService {
       debugPrint('MusicPlayerService: open/verify failed: $e');
     }
     return false;
+  }
+
+  /// Downloads the audio at [url] to a temp file and returns its path, or
+  /// null if it can't (blocked, too slow, or the user moved to another song).
+  Future<String?> _downloadToTemp(String url, String videoId, int generation) async {
+    final client = http.Client();
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}${Platform.pathSeparator}pt_stream_$videoId.m4a');
+      final req = http.Request('GET', Uri.parse(url))
+        ..headers.addAll(_musicService.playbackHeaders(url));
+      final resp = await client.send(req).timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200 && resp.statusCode != 206) {
+        debugPrint('MusicPlayerService: temp download refused (${resp.statusCode})');
+        return null;
+      }
+      // Remove earlier temp songs so they don't pile up.
+      try {
+        await for (final e in dir.list()) {
+          if (e is File && e.path.contains('pt_stream_') && e.path != file.path) {
+            await e.delete();
+          }
+        }
+      } catch (_) {}
+      final sink = file.openWrite();
+      try {
+        await resp.stream.timeout(const Duration(seconds: 60)).forEach((c) {
+          if (_playGeneration != generation) throw StateError('cancelled');
+          sink.add(c);
+        });
+      } finally {
+        await sink.close();
+      }
+      if (await file.length() < 10000) return null;
+      return file.path;
+    } catch (e) {
+      debugPrint('MusicPlayerService: temp download failed: $e');
+      return null;
+    } finally {
+      client.close();
+    }
   }
 
   /// Stops the spinner and tells the UI why playback failed.
