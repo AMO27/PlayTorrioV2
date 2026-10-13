@@ -32,6 +32,10 @@ workflow when you want one) so a push never starts a build by surprise.
 - **Windows build no longer stops if the libtorrent native-lib pre-download
   returns Not Found.** It warns and continues, so the real error (if any) shows
   up in the step that needs the file.
+- **Windows build reuses the libtorrent native DLLs from an earlier good
+  build.** The upstream download for `libtorrent_flutter` 1.9.9 was removed
+  (404), which broke Windows builds. The nine DLLs it contained are now taken
+  from the Oct 8 build's stored artifact. (That artifact expires 2027-01-06.)
 
 ## 2026-10-08
 
