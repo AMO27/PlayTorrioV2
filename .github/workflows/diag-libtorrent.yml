@@ -1,0 +1,49 @@
+name: Diagnose libtorrent (Windows)
+run-name: Diagnose libtorrent native lib
+
+# Manual only. Prints how libtorrent_flutter finds its Windows native files and
+# what an earlier successful Windows build contains, as annotations.
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Where the package looks for its native lib
+        shell: pwsh
+        run: |
+          function Say($t) { ($t -split "`r?`n") | ForEach-Object { if ($_.Trim()) { Write-Host ("::notice::" + ($_ -replace '%','%25')) } } }
+          $root = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { "$env:LOCALAPPDATA\Pub\Cache" }
+          $pkg = Get-ChildItem (Join-Path $root "hosted\pub.dev") -Filter "libtorrent_flutter-*" | Select-Object -First 1
+          Say "package dir: $($pkg.FullName)"
+          Say ((Get-Content "$($pkg.FullName)\pubspec.yaml" | Select-String -Pattern 'repository|homepage|version|issue_tracker') -join "`n")
+          Say "--- src/CMakeLists.txt (prebuilt / download / URL lines) ---"
+          Say ((Get-Content "$($pkg.FullName)\src\CMakeLists.txt" | Select-String -Pattern 'prebuilt|http|DOWNLOAD|\.dll|\.lib|Libtorrent' | ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }) -join "`n")
+          Say "--- windows/CMakeLists.txt ---"
+          if (Test-Path "$($pkg.FullName)\windows\CMakeLists.txt") {
+            Say ((Get-Content "$($pkg.FullName)\windows\CMakeLists.txt" | Select-String -Pattern 'prebuilt|http|DOWNLOAD|\.dll|\.lib|bundled' | ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }) -join "`n")
+          }
+          Say "--- files in package mentioning prebuilt ---"
+          Say ((Get-ChildItem $pkg.FullName -Recurse -File | Where-Object { $_.FullName -match 'prebuilt' } | ForEach-Object { $_.FullName.Substring($pkg.FullName.Length) }) -join "`n")
+      - name: Download the last good Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: PlayTorrio-windows
+          run-id: 37705649721
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: oldbuild
+      - name: Native files in the last good build
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem oldbuild -Recurse -File | Where-Object { $_.Name -match 'torrent|boost|ssl|crypto|libtorrent' } | ForEach-Object { "$($_.FullName.Substring((Get-Location).Path.Length)) $($_.Length)" }
+          ($files -join "`n") -split "`n" | ForEach-Object { Write-Host ("::notice::" + $_) }
