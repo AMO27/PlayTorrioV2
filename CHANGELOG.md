@@ -28,6 +28,11 @@ workflow when you want one) so a push never starts a build by surprise.
 - **Windows build bundles yt-dlp nightly** instead of the last stable release
   (2026.08.19), which doesn't have YouTube's latest fixes yet.
 
+### Build
+- **Windows build no longer stops if the libtorrent native-lib pre-download
+  returns Not Found.** It warns and continues, so the real error (if any) shows
+  up in the step that needs the file.
+
 ## 2026-10-08
 
 ### Books
