@@ -65,19 +65,14 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          function Say($t) { ($t -split "`r?`n") | ForEach-Object { if ($_.Trim()) { Write-Host ("::notice::" + ($_ -replace '%','%25')) } } }
+          # One annotation per item (GitHub caps annotations at 10 per step).
+          function Say($t) { Write-Host ("::notice::" + (($t -replace '%','%25') -replace "`r?`n",'%0A')) }
           $root = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { "$env:LOCALAPPDATA\Pub\Cache" }
           $pkg = Get-ChildItem (Join-Path $root "hosted\pub.dev") -Filter "libtorrent_flutter-*" | Select-Object -First 1
-          Say "package dir: $($pkg.FullName)"
-          Say ((Get-Content "$($pkg.FullName)\pubspec.yaml" | Select-String -Pattern 'repository|homepage|version|issue_tracker') -join "`n")
-          Say "--- src/CMakeLists.txt (prebuilt / download / URL lines) ---"
-          Say ((Get-Content "$($pkg.FullName)\src\CMakeLists.txt" | Select-String -Pattern 'prebuilt|http|DOWNLOAD|\.dll|\.lib|Libtorrent' | ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }) -join "`n")
-          Say "--- windows/CMakeLists.txt ---"
-          if (Test-Path "$($pkg.FullName)\windows\CMakeLists.txt") {
-            Say ((Get-Content "$($pkg.FullName)\windows\CMakeLists.txt" | Select-String -Pattern 'prebuilt|http|DOWNLOAD|\.dll|\.lib|bundled' | ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }) -join "`n")
-          }
-          Say "--- files in package mentioning prebuilt ---"
-          Say ((Get-ChildItem $pkg.FullName -Recurse -File | Where-Object { $_.FullName -match 'prebuilt' } | ForEach-Object { $_.FullName.Substring($pkg.FullName.Length) }) -join "`n")
+          Say ("TREE`n" + ((Get-ChildItem $pkg.FullName -Recurse -File | Where-Object { $_.FullName -notmatch '\\(example|test|docs|android|ios|macos|linux)\\' } | ForEach-Object { $_.FullName.Substring($pkg.FullName.Length) }) -join "`n"))
+          Say ("SRC CMake`n" + (Get-Content "$($pkg.FullName)\src\CMakeLists.txt" -Raw))
+          Say ("WINDOWS CMake`n" + (Get-Content "$($pkg.FullName)\windows\CMakeLists.txt" -Raw))
+          if (Test-Path "$($pkg.FullName)\hook\build.dart") { Say ("hook/build.dart`n" + (Get-Content "$($pkg.FullName)\hook\build.dart" -Raw)) }
       - name: "Diag: download the last good Windows build"
         if: ${{ inputs.diag == 'true' }}
         continue-on-error: true
