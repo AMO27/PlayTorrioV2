@@ -17,6 +17,9 @@ workflow when you want one) so a push never starts a build by surprise.
 ## 2026-10-14
 
 ### Music
+- **Stops hammering a blocked connection.** When YouTube rate-limits or asks for a
+  bot check, Music pauses all YouTube requests for 10 minutes (no retries, no
+  pre-loading, no auto-skipping) and shows a short explanation instead.
 - **Windows: asks yt-dlp for the link and its headers**, then plays or saves the
   song with those exact headers. YouTube now refuses links opened with a
   different identity than the one that made them.

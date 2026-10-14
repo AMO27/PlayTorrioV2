@@ -9,6 +9,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/debug_log.dart';
+import '../services/youtube_block.dart';
 import 'music_service.dart';
 import 'music_storage_service.dart';
 import 'audio_handler.dart';
@@ -296,6 +297,10 @@ class MusicPlayerService {
 
       // 2. YouTube Match (time-limited so the UI can never wait forever)
       DebugLog.write('music', 'play: ${track.title} / ${track.artist}');
+      if (YoutubeBlock.isBlocked) {
+        _failPlayback(generation, YoutubeBlock.notice ?? 'YouTube is blocking this connection.');
+        return;
+      }
       debugPrint('MusicPlayerService: resolving videoId for "${track.title}" / "${track.artist}"');
       final videoId = await _musicService
           .getYoutubeVideoId(track.title, track.artist)
@@ -315,6 +320,7 @@ class MusicPlayerService {
       // once with the fallback extractor, then report a clear error.
       var gotLink = false;
       for (var attempt = 0; attempt < 2; attempt++) {
+        if (YoutubeBlock.isBlocked) break;
         final streamUrl = await _musicService
             .getYoutubeStreamUrl(videoId, skipFastPath: attempt > 0)
             .timeout(const Duration(seconds: 25), onTimeout: () => null);
@@ -450,6 +456,14 @@ class MusicPlayerService {
     _setVolume(100);
     _player.stop().catchError((_) {});
 
+    // A blocked connection fails every song, so skipping ahead would only send
+    // more requests. Show the explanation once and stop.
+    if (YoutubeBlock.isBlocked) {
+      _consecutiveFailures = 0;
+      playbackError.value = YoutubeBlock.notice ?? message;
+      return;
+    }
+
     // In an album / playlist / saved songs, skip to the next song instead of
     // stopping. Stop only once every song in a row has failed, so a total
     // outage can't loop forever.
@@ -501,6 +515,7 @@ class MusicPlayerService {
 
   void _prefetchNext() async {
     if (playlist.value.isEmpty || _currentIndex == -1) return;
+    if (YoutubeBlock.isBlocked) return;
     final nextIndex = (_currentIndex + 1) % playlist.value.length;
     final nextTrack = playlist.value[nextIndex];
     // Prefetch both video ID and stream URL so next track plays instantly

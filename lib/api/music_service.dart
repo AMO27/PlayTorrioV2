@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../services/debug_log.dart';
+import '../services/youtube_block.dart';
 import '../services/youtube_audio_extractor.dart';
 import '../services/youtube_mirror_service.dart';
 import '../services/webview_ejs_solver.dart';
@@ -303,6 +304,8 @@ class MusicService {
       return _videoIdCache[cacheKey];
     }
 
+    if (YoutubeBlock.isBlocked) return null; // don't hammer a blocked connection
+
     // Warm up the phone-side JS challenge solver while we search, so it's
     // ready by the time the stream URL is needed.
     unawaited(_solverYt());
@@ -499,6 +502,7 @@ class MusicService {
       return cached.url;
     }
 
+    if (YoutubeBlock.isBlocked) return null; // don't hammer a blocked connection
     if (!skipFastPath) _failures.clear(); // keep first-try reasons on the retry
     // First choice: yt-dlp (shipped next to the exe on Windows). The
     // in-app InnerTube extractor below is already known to get blocked on

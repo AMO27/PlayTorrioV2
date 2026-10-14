@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'services/debug_log.dart';
+import 'services/youtube_block.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -43,6 +44,7 @@ void _killAfterDelay(int targetPid) {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   DebugLog.install(); // errors from every section go to playtorrio-debug.log
+  YoutubeBlock.watch(); // stop retrying when YouTube blocks the connection
   debugPrint('[Boot] Flutter binding initialized');
 
   // Configure InAppWebView (Android only — not supported on iOS)
