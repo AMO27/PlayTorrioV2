@@ -35,6 +35,50 @@ class YoutubeAudioExtractor {
 
   // --- Client definitions (order = priority for audioOnly short-circuit) ---
   static final List<_YtClient> _clients = [
+    // visionOS identity. As of Oct 2026 this is one of the few YouTube clients
+    // that needs neither a "proof of origin" token nor the JS player, so it is
+    // tried first. (The Android, iPhone and VR identities below now get their
+    // links refused without a token; they stay as late fallbacks.)
+    _YtClient(
+      key: 'visionos',
+      id: '101',
+      version: '1.02',
+      userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15',
+      context: {
+        'clientName': 'VISIONOS',
+        'clientVersion': '1.02',
+        'deviceMake': 'Apple',
+        'deviceModel': 'RealityDevice17,1',
+        'userAgent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15',
+        'osName': 'visionOS',
+        'osVersion': '26.5.23O471',
+        'hl': 'en',
+        'gl': 'US',
+      },
+    ),
+    // Samsung smart-TV identity. yt-dlp made this a default client in Oct 2026
+    // after YouTube started refusing the phone/VR identities.
+    _YtClient(
+      key: 'tv_samsung',
+      id: '7',
+      version: '5.20260707',
+      userAgent:
+          'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+      context: {
+        'clientName': 'TVHTML5',
+        'clientVersion': '5.20260707',
+        'deviceMake': 'Samsung',
+        'deviceModel': 'UKS9800',
+        'osName': 'Tizen',
+        'osVersion': '2.4.0',
+        'userAgent':
+            'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+        'hl': 'en',
+        'gl': 'US',
+      },
+    ),
     _YtClient(
       key: 'android_vr',
       id: '28',
@@ -85,27 +129,6 @@ class YoutubeAudioExtractor {
         'osName': 'iPhone',
         'osVersion': '17.4.0.21E219',
         'platform': 'MOBILE',
-        'hl': 'en',
-        'gl': 'US',
-      },
-    ),
-    // Samsung smart-TV identity. yt-dlp made this a default client in Oct 2026
-    // after YouTube started refusing the phone/VR identities.
-    _YtClient(
-      key: 'tv_samsung',
-      id: '7',
-      version: '5.20260707',
-      userAgent:
-          'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
-      context: {
-        'clientName': 'TVHTML5',
-        'clientVersion': '5.20260707',
-        'deviceMake': 'Samsung',
-        'deviceModel': 'UKS9800',
-        'osName': 'Tizen',
-        'osVersion': '2.4.0',
-        'userAgent':
-            'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
         'hl': 'en',
         'gl': 'US',
       },

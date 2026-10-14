@@ -84,7 +84,18 @@ jobs:
           Get-ChildItem $dest | ForEach-Object { Write-Host "  $($_.Name) $($_.Length)" }
           if (-not (Test-Path "$dest\libtorrent_flutter.dll")) { throw "libtorrent_flutter.dll not found in the earlier build" }
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
-      - run: flutter build windows --release
+      # On failure, copy the end of the build log into an annotation so the
+      # real error is visible without opening the log.
+      - name: Build Windows
+        shell: pwsh
+        run: |
+          flutter build windows --release 2>&1 | Tee-Object -FilePath build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (Get-Content build.log -Tail 60) -join "`n"
+            Write-Host ("::error title=flutter build windows failed::" + (($tail -replace '%','%25') -replace "`r?`n",'%0A'))
+            exit $code
+          }
       # yt-dlp is used by the music player to resolve YouTube audio streams.
       # Uses yt-dlp's nightly builds: YouTube changes faster than stable
       # releases, and fixes land in nightly first.

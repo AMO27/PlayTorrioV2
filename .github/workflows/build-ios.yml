@@ -84,12 +84,19 @@ jobs:
       - run: flutter pub get
 
       # ── Release build ────────────────────────────────────────────────────
-      - run: >
-          flutter build ios --release --no-codesign
-          --dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}
-          --dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}
-          --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
-          --dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}
+      - name: Build iOS
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign \
+            --dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }} \
+            --dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }} \
+            --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }} \
+            --dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }} 2>&1 | tee build.log || {
+            msg=$(tail -60 build.log | sed 's/%/%25/g' | awk '{printf "%s%%0A",$0}')
+            echo "::error title=flutter build ios failed::$msg"
+            exit 1
+          }
 
       - name: Package as IPA
         run: |

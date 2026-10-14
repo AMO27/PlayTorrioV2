@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/debug_log.dart';
 import 'music_service.dart';
 import 'music_storage_service.dart';
 import 'audio_handler.dart';
@@ -192,6 +193,7 @@ class MusicPlayerService {
 
     _player.stream.error.listen((e) {
       debugPrint('MusicPlayerService: PLAYER ERROR -> $e');
+      DebugLog.write('music', 'player error: $e');
     });
     _player.stream.log.listen((l) {
       // mpv-level logs (warn/error only to keep noise down).
@@ -202,6 +204,7 @@ class MusicPlayerService {
       // unrelated mpv chatter.
       if (currentTrack.value == null) return;
       if (l.level == 'error' || l.level == 'warn' || l.level == 'fatal') {
+        DebugLog.write('mpv', '${l.level} ${l.prefix}: ${l.text.trim()}');
         debugPrint('MusicPlayerService: mpv [${l.level}] ${l.prefix}: ${l.text}');
       }
     });
@@ -292,6 +295,7 @@ class MusicPlayerService {
       }
 
       // 2. YouTube Match (time-limited so the UI can never wait forever)
+      DebugLog.write('music', 'play: ${track.title} / ${track.artist}');
       debugPrint('MusicPlayerService: resolving videoId for "${track.title}" / "${track.artist}"');
       final videoId = await _musicService
           .getYoutubeVideoId(track.title, track.artist)
@@ -336,6 +340,7 @@ class MusicPlayerService {
           return;
         }
         debugPrint('MusicPlayerService: playback did not start on attempt ${attempt + 1}');
+        DebugLog.write('music', 'attempt ${attempt + 1}: link did not play (${Uri.parse(streamUrl).host}), headers sent: ${_musicService.playbackHeaders(streamUrl).keys.join(',')}');
         // Last resort for this attempt: save the audio to a temp file and play
         // that. Saving songs uses the same kind of request and still works
         // when streaming the link is refused.
@@ -386,6 +391,7 @@ class MusicPlayerService {
       }
     } catch (e) {
       debugPrint('MusicPlayerService: open/verify failed: $e');
+      DebugLog.write('music', 'open/verify failed: $e');
     }
     return false;
   }
@@ -402,6 +408,7 @@ class MusicPlayerService {
       final resp = await client.send(req).timeout(const Duration(seconds: 20));
       if (resp.statusCode != 200 && resp.statusCode != 206) {
         debugPrint('MusicPlayerService: temp download refused (${resp.statusCode})');
+        DebugLog.write('music', 'temp download refused: HTTP ${resp.statusCode} from ${Uri.parse(url).host}');
         return null;
       }
       // Remove earlier temp songs so they don't pile up.
@@ -425,6 +432,7 @@ class MusicPlayerService {
       return file.path;
     } catch (e) {
       debugPrint('MusicPlayerService: temp download failed: $e');
+      DebugLog.write('music', 'temp download failed: $e');
       return null;
     } finally {
       client.close();
@@ -435,6 +443,7 @@ class MusicPlayerService {
   void _failPlayback(int generation, String message) {
     if (_playGeneration != generation) return; // a newer track took over
     debugPrint('MusicPlayerService: FAILED — $message');
+    DebugLog.write('music', 'FAILED: ${message.replaceAll('\n', ' | ')}');
     isBuffering.value = false;
     _autoAdvance = false;
     _fadeInTimer?.cancel();

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import '../services/debug_log.dart';
 import '../services/youtube_audio_extractor.dart';
 import '../services/youtube_mirror_service.dart';
 import '../services/webview_ejs_solver.dart';
@@ -135,6 +136,7 @@ class MusicService {
     r = r.replaceFirst(RegExp(r'^(Exception|YoutubeExplodeException|VideoUnplayableException|ClientException)[:\s]*'), '');
     if (r.length > 90) r = '${r.substring(0, 90)}…';
     _failures.add('• $method: $r');
+    DebugLog.write('music', '$method failed: ${reason.toString().replaceAll('\n', ' | ')}');
   }
 
   Future<YoutubeExplode?> _solverYt() {
@@ -363,7 +365,9 @@ class MusicService {
     return null;
   }
 
-  /// Fast stream URL fetching for playback — uses shared instance for cookie persistence
+  /// Fast stream URL fetching for playback. Asks yt-dlp for the link AND the
+  /// headers it would send with it (User-Agent etc.), because YouTube refuses
+  /// the link if the player presents a different identity.
   Future<String?> _ytDlpStreamUrl(String videoId) async {
     if (!Platform.isWindows) return null;
     try {
@@ -371,30 +375,91 @@ class MusicService {
           '${File(Platform.resolvedExecutable).parent.path}${Platform.pathSeparator}yt-dlp.exe');
       if (!await exe.exists()) {
         debugPrint('MusicService: yt-dlp.exe not found at ${exe.path}');
+        _noteFailure('yt-dlp', 'yt-dlp.exe not found next to the app');
         return null;
       }
       final res = await Process.run(exe.path, [
         '-f', 'bestaudio/best',
         '--no-playlist',
         '--no-warnings',
-        '-g',
+        '-j',
         'https://www.youtube.com/watch?v=$videoId',
       ]).timeout(const Duration(seconds: 40));
       if (res.exitCode != 0) {
         debugPrint('MusicService: yt-dlp failed: ${res.stderr}');
+        final err = res.stderr
+            .toString()
+            .split('\n')
+            .map((l) => l.trim())
+            .lastWhere((l) => l.isNotEmpty, orElse: () => 'exit code ${res.exitCode}');
+        _noteFailure('yt-dlp', err);
         return null;
       }
-      final line = res.stdout
-          .toString()
-          .split('\n')
-          .map((l) => l.trim())
-          .firstWhere((l) => l.startsWith('http'), orElse: () => '');
-      return line.isEmpty ? null : line;
+      final out = res.stdout.toString().trim();
+      final start = out.indexOf('{');
+      if (start < 0) {
+        _noteFailure('yt-dlp', 'no data returned');
+        return null;
+      }
+      final info = jsonDecode(out.substring(start)) as Map<String, dynamic>;
+      final url = info['url']?.toString() ?? '';
+      if (!url.startsWith('http')) {
+        _noteFailure('yt-dlp', 'no audio link in the result');
+        return null;
+      }
+      final h = info['http_headers'];
+      if (h is Map) {
+        _headersByUrl[url] = h.map((k, v) => MapEntry(k.toString(), v.toString()));
+      }
+      return url;
     } catch (e) {
       debugPrint('MusicService: yt-dlp error: $e');
+      _noteFailure('yt-dlp', e is TimeoutException ? 'timed out' : e);
       return null;
     }
   }
+
+  // Clients that YouTube still serves without a "proof of origin" token
+  // (same identities yt-dlp uses by default as of Oct 2026). The library's
+  // own Android/iPhone/VR clients now get their links refused.
+  static const _visionOsUa =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+  static const _tvSamsungUa =
+      'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1';
+  static const _visionOsClient = YoutubeApiClient({
+    'context': {
+      'client': {
+        'clientName': 'VISIONOS',
+        'clientVersion': '1.02',
+        'deviceMake': 'Apple',
+        'deviceModel': 'RealityDevice17,1',
+        'userAgent': _visionOsUa,
+        'osName': 'visionOS',
+        'osVersion': '26.5.23O471',
+        'hl': 'en',
+        'gl': 'US',
+        'timeZone': 'UTC',
+        'utcOffsetMinutes': 0,
+      },
+    },
+  }, 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false');
+  static const _tvSamsungClient = YoutubeApiClient({
+    'context': {
+      'client': {
+        'clientName': 'TVHTML5',
+        'clientVersion': '5.20260707',
+        'deviceMake': 'Samsung',
+        'deviceModel': 'UKS9800',
+        'userAgent': _tvSamsungUa,
+        'osName': 'Tizen',
+        'osVersion': '2.4.0',
+        'hl': 'en',
+        'gl': 'US',
+        'timeZone': 'UTC',
+        'utcOffsetMinutes': 0,
+      },
+    },
+  }, 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false');
 
   // Which YouTube identity produced a link decides which headers it will
   // accept. Without matching headers the player gets refused ("link blocked").
@@ -407,9 +472,18 @@ class MusicService {
   static const _browserUa =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
   final Map<String, String> _uaByUrl = {};
+  // Full header sets reported by yt-dlp for the links it produced.
+  final Map<String, Map<String, String>> _headersByUrl = {};
 
   /// Headers to open [url] with so YouTube treats it like the app that asked.
   Map<String, String> playbackHeaders(String url) {
+    final exact = _headersByUrl[url];
+    if (exact != null) {
+      return {
+        for (final e in exact.entries)
+          if (e.key.toLowerCase() != 'accept-encoding') e.key: e.value,
+      };
+    }
     final ua = _uaByUrl[url] ??
         YoutubeAudioExtractor.userAgentForUrl(url) ??
         _browserUa;
@@ -425,6 +499,7 @@ class MusicService {
       return cached.url;
     }
 
+    if (!skipFastPath) _failures.clear(); // keep first-try reasons on the retry
     // First choice: yt-dlp (shipped next to the exe on Windows). The
     // in-app InnerTube extractor below is already known to get blocked on
     // this network, so trying it first only burns time before falling
@@ -445,7 +520,6 @@ class MusicService {
     //     they're only used when the direct methods are slow or blocked.
     // On a retry (the first URL didn't play) skip the methods that just
     // produced a dud and go to the mirrors right away.
-    if (!skipFastPath) _failures.clear(); // keep first-try reasons on the retry
     var resolved = false;
     final url = await _firstNonNullUrl([
       if (!skipFastPath) _fastExtractorUrl(videoId),
@@ -512,6 +586,8 @@ class MusicService {
     // the VR client that worked before, and the iPhone client — all at once.
     if (!solverOnly) {
       final url = await _firstNonNullUrl([
+        tryClient(_yt, _visionOsClient, 'visionOS client', _visionOsUa),
+        tryClient(_yt, _tvSamsungClient, 'Samsung TV client', _tvSamsungUa),
         tryClient(_yt, YoutubeApiClient.androidSdkless, 'Android client', _androidUa),
         tryClient(_yt, YoutubeApiClient.androidVr, 'VR client', _vrUa),
         tryClient(_yt, YoutubeApiClient.ios, 'iPhone client', _iosUa),
@@ -526,6 +602,7 @@ class MusicService {
       return null;
     }
     return _firstNonNullUrl([
+      tryClient(solverYt, _tvSamsungClient, 'Samsung TV client (unblocked)', _tvSamsungUa),
       tryClient(solverYt, YoutubeApiClient.safari, 'Safari client', _browserUa),
       tryClient(solverYt, YoutubeApiClient.tv, 'TV client', 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version,gzip(gfe)'),
     ]);

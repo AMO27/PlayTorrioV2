@@ -14,6 +14,25 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-14
+
+### Music
+- **Windows: asks yt-dlp for the link and its headers**, then plays or saves the
+  song with those exact headers. YouTube now refuses links opened with a
+  different identity than the one that made them.
+- **visionOS and Samsung TV clients** added to the built-in extractor and the
+  library path. The Android, iPhone and VR identities now need a proof-of-origin
+  token and get refused without one.
+- **yt-dlp failures now show up in the error message** instead of failing
+  silently.
+
+### Debugging
+- **`playtorrio-debug.log`** (Windows, next to the exe) records every uncaught
+  error, every Flutter error and every logged problem from any section of the
+  app, plus detailed music steps. It keeps itself under ~400 KB.
+- **Failed Windows and iOS builds put the end of the build output in an error
+  message** on the run page, so the real error is visible without the full log.
+
 ## 2026-10-13
 
 ### Music
