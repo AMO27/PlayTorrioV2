@@ -15,16 +15,50 @@ class KitsuFallback {
   static final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15);
 
+  // Kitsu is easily overloaded: the anime home page asks for ~10 lists at once.
+  // Keep at most 3 requests in flight, reuse identical answers for 2 minutes
+  // and retry server errors a couple of times.
+  static int _inFlight = 0;
+  static final Map<String, (DateTime, Map<String, dynamic>)> _cache = {};
+
   static Future<Map<String, dynamic>> _get(String path, Map<String, String> q) async {
     final uri = Uri.parse('$_base$path').replace(queryParameters: q);
-    final req = await _client.getUrl(uri);
-    req.headers.set('Accept', 'application/vnd.api+json');
-    final res = await req.close().timeout(const Duration(seconds: 20));
-    final body = await res.transform(utf8.decoder).join();
-    if (res.statusCode != 200) {
-      throw Exception('Kitsu: HTTP ${res.statusCode}');
+    final key = uri.toString();
+    final hit = _cache[key];
+    if (hit != null && DateTime.now().difference(hit.$1) < const Duration(minutes: 2)) {
+      return hit.$2;
     }
-    return jsonDecode(body) as Map<String, dynamic>;
+    while (_inFlight >= 3) {
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+    _inFlight++;
+    try {
+      Object? lastError;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          final req = await _client.getUrl(uri);
+          req.headers.set('Accept', 'application/vnd.api+json');
+          final res = await req.close().timeout(const Duration(seconds: 20));
+          final body = await res.transform(utf8.decoder).join();
+          if (res.statusCode == 200) {
+            final json = jsonDecode(body) as Map<String, dynamic>;
+            _cache[key] = (DateTime.now(), json);
+            return json;
+          }
+          final snippet = body.replaceAll(RegExp(r'\s+'), ' ');
+          log('HTTP ${res.statusCode} for $uri: '
+              '${snippet.length > 160 ? snippet.substring(0, 160) : snippet}');
+          lastError = Exception('Kitsu: HTTP ${res.statusCode}');
+          if (res.statusCode < 500 && res.statusCode != 429) break;
+        } catch (e) {
+          lastError = e;
+        }
+        await Future.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+      }
+      throw lastError ?? Exception('Kitsu request failed');
+    } finally {
+      _inFlight--;
+    }
   }
 
   /// Sort keys use AniList's names so callers don't need to change.

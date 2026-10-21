@@ -16,6 +16,17 @@ workflow when you want one) so a push never starts a build by surprise.
 
 ## 2026-10-21
 
+### Fixes
+- **Comics: "failed to load chapter pages" (HTTP 404)** on Read Free Comics and BatCave.
+  The reader tacked `?s=s2` onto every chapter link, which WordPress treats as a
+  search. It is now only added for the old site.
+- **Comics: clearer site errors.** A refused request now says the HTTP code, and the
+  debug log records the site's server and the start of its reply, so a real bot
+  check can be told apart from a plain 403.
+- **Anime: Kitsu errors.** The backup now sends at most 3 requests at once, reuses
+  identical answers for 2 minutes and retries server errors, so the home page
+  stops tripping Kitsu's 500s.
+
 ### Anime
 - **AniList switched its API off ("temporarily disabled")**, which broke every
   anime page. The app now falls back to Kitsu for the home lists, search, browse

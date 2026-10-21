@@ -23,6 +23,7 @@ class _Web {
         'User-Agent': ua,
         'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://$host/',
       }).timeout(timeout);
     } on TimeoutException {
       throw ComicsUnavailableException(
@@ -32,12 +33,19 @@ class _Web {
           "Couldn't reach $host (${e.runtimeType}). Check your connection, VPN or firewall.");
     }
     final head = res.body.length > 4000 ? res.body.substring(0, 4000) : res.body;
-    if (res.statusCode == 403 ||
-        res.statusCode == 503 ||
-        head.contains('<title>Just a moment') ||
-        head.contains('challenges.cloudflare.com')) {
+    final looksLikeCheck = head.contains('<title>Just a moment') ||
+        head.contains('challenges.cloudflare.com') ||
+        head.contains('cf-browser-verification') ||
+        head.contains('ddos-guard');
+    if (res.statusCode != 200 || looksLikeCheck) {
+      // Record exactly what came back so the debug log shows the real cause.
+      final snippet = head.replaceAll(RegExp(r'\s+'), ' ').trim();
+      debugPrint('[$host] request failed: HTTP ${res.statusCode} '
+          'server=${res.headers['server']} url=$uri body=${snippet.length > 160 ? snippet.substring(0, 160) : snippet}');
+    }
+    if (looksLikeCheck || res.statusCode == 403 || res.statusCode == 503) {
       throw ComicsUnavailableException(
-          '$host is asking for a browser check, which the app cannot complete. Try again later or open it in your browser.');
+          '$host refused the app (HTTP ${res.statusCode}${looksLikeCheck ? ', browser check' : ''}). Try again later or open it in your browser.');
     }
     if (res.statusCode != 200) {
       throw ComicsUnavailableException('$host returned HTTP ${res.statusCode}.');

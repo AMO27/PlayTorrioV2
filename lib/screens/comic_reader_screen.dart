@@ -107,7 +107,9 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     // (Only for the old rcostation-style sources: on readcomiconline.xyz `?s=`
     // is WordPress's search parameter and turns the chapter into a 404.)
     final isLocal = chapterUrl.startsWith('local:');
-    if (!isLocal && !chapterUrl.contains('readcomiconline.xyz') && !chapterUrl.contains('s=s2')) {
+    // `?s=s2` is only for the old rcostation-style source; on WordPress/DLE sites
+    // (BatCave, Read Free Comics, readcomiconline) `?s=` is a search and 404s.
+    if (!isLocal && chapterUrl.contains('rcostation.xyz') && !chapterUrl.contains('s=s2')) {
       chapterUrl += chapterUrl.contains('?') ? '&s=s2' : '?s=s2';
     }
     
