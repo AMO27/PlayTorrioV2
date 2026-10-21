@@ -3,6 +3,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../api/comics_service.dart';
+import '../api/comic_download_service.dart';
+import 'dart:io';
 import '../api/comic_page_extractor.dart';
 import '../utils/app_theme.dart';
 
@@ -104,12 +106,15 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     var chapterUrl = url;
     // (Only for the old rcostation-style sources: on readcomiconline.xyz `?s=`
     // is WordPress's search parameter and turns the chapter into a 404.)
-    if (!chapterUrl.contains('readcomiconline.xyz') && !chapterUrl.contains('s=s2')) {
+    final isLocal = chapterUrl.startsWith('local:');
+    if (!isLocal && !chapterUrl.contains('readcomiconline.xyz') && !chapterUrl.contains('s=s2')) {
       chapterUrl += chapterUrl.contains('?') ? '&s=s2' : '?s=s2';
     }
     
     try {
-      final pages = await _comicsService.getChapterPages(chapterUrl, _pageExtractor);
+      final pages = isLocal
+          ? await ComicDownloadService.localPages(chapterUrl.substring(6))
+          : await _comicsService.getChapterPages(chapterUrl, _pageExtractor);
       if (mounted) {
         setState(() {
           _pageUrls = pages;
@@ -168,11 +173,13 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     }
   }
 
+  static bool _isLocalPath(String u) => !u.startsWith('http');
+
   Future<void> _prefetchNextPage(int currentPageIndex) async {
     final nextPageIndex = currentPageIndex + 1;
     
-    // Only prefetch if there's a next page
-    if (nextPageIndex < _pageUrls.length) {
+    // Only prefetch if there's a next page (downloaded files are already local)
+    if (nextPageIndex < _pageUrls.length && !_isLocalPath(_pageUrls[nextPageIndex])) {
       // Prefetch in the background without blocking UI
       _comicsService.getPageImage(_pageUrls[nextPageIndex], _pageExtractor).then((url) {
         if (mounted && url != null) {
@@ -406,7 +413,17 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                                   _currentScale = _transformationController.value.getMaxScaleOnAxis();
                                 });
                               },
-                              child: CachedNetworkImage(
+                              child: _isLocalPath(_currentImageUrl!)
+                                  ? Image.file(
+                                      File(_currentImageUrl!),
+                                      fit: BoxFit.contain,
+                                      width: double.infinity,
+                                      height: double.infinity,
+                                      errorBuilder: (c, e, st) => const Center(
+                                        child: Icon(Icons.broken_image, color: Colors.white24, size: 48),
+                                      ),
+                                    )
+                                  : CachedNetworkImage(
                                 imageUrl: _currentImageUrl!,
                                 fit: BoxFit.contain,
                                 width: double.infinity,

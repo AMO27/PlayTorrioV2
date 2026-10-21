@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'comic_reader_screen.dart';
 import '../api/comics_service.dart';
+import '../api/comic_download_service.dart';
+import '../api/extra_comic_sources.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../utils/app_theme.dart';
 
 class ComicDetailsScreen extends StatefulWidget {
@@ -262,8 +265,55 @@ class _ComicDetailsScreenState extends State<ComicDetailsScreen> {
             chapter.dateAdded,
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
-          trailing: const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (ComicDownloadService.canDownload(widget.comic, chapter))
+                ValueListenableBuilder<Map<String, double>>(
+                  valueListenable: ComicDownloadService.instance.progress,
+                  builder: (context, active, _) {
+                    final p = active[chapter.url];
+                    if (p != null) {
+                      return SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          value: p > 0 ? p : null,
+                        ),
+                      );
+                    }
+                    return IconButton(
+                      icon: const Icon(Icons.download_rounded, color: Colors.white70, size: 22),
+                      tooltip: 'Download',
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        messenger.showSnackBar(SnackBar(
+                            content: Text('Downloading ${chapter.title}…')));
+                        final err = await ComicDownloadService.instance
+                            .download(widget.comic, chapter);
+                        messenger.hideCurrentSnackBar();
+                        messenger.showSnackBar(SnackBar(
+                          content: Text(err == null
+                              ? 'Saved: ${chapter.title} (see Comics > Downloads)'
+                              : 'Download failed: $err'),
+                        ));
+                      },
+                    );
+                  },
+                ),
+              const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 14),
+            ],
+          ),
           onTap: () {
+            // GetComics rows are download links: the "Download now" arrow saves
+            // in-app, tapping a row opens that link in the browser.
+            if (widget.comic.source == GetComicsScraper.sourceTag ||
+                GetComicsScraper.ownsUrl(widget.comic.url)) {
+              launchUrl(Uri.parse(chapter.url),
+                  mode: LaunchMode.externalApplication);
+              return;
+            }
             Navigator.push(
               context,
               MaterialPageRoute(

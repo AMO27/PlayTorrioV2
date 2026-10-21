@@ -14,13 +14,21 @@ import 'anihq_extractor.dart';
 import 'watchhentai_extractor.dart';
 import 'hentaini_extractor.dart';
 import 'miruro_extractor.dart';
+import 'kitsu_fallback.dart';
 
 class AnimeService {
   static const String _gql = 'https://graphql.anilist.co';
   final HttpClient _client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
 
   // ─── GraphQL helper ─────────────────────────────────────────────
+  // When AniList switches its API off (403 "temporarily disabled"), stop asking
+  // for a few minutes and use the Kitsu backup instead.
+  static DateTime? _anilistDownUntil;
+  static bool get _anilistDown =>
+      _anilistDownUntil != null && DateTime.now().isBefore(_anilistDownUntil!);
+
   Future<dynamic> _query(String query, [Map<String, dynamic>? vars]) async {
+    if (_anilistDown) throw Exception('AniList is switched off right now');
     final req = await _client.postUrl(Uri.parse(_gql));
     req.headers.contentType = ContentType.json;
     req.headers.set('Accept', 'application/json');
@@ -29,7 +37,15 @@ class AnimeService {
     final body = await res.transform(utf8.decoder).join();
     final data = jsonDecode(body);
     if (data['errors'] != null) {
-      throw Exception('AniList: ${data['errors']}');
+      final text = '${data['errors']}';
+      if (res.statusCode == 403 ||
+          res.statusCode == 429 ||
+          res.statusCode >= 500 ||
+          text.contains('disabled')) {
+        _anilistDownUntil = DateTime.now().add(const Duration(minutes: 5));
+        debugPrint('[Anime] AniList refused ($text); using Kitsu for 5 min');
+      }
+      throw Exception('AniList: $text');
     }
     return data['data'];
   }
@@ -105,9 +121,16 @@ class AnimeService {
         }
       }
     ''';
-    final data = await _query(q, {'page': page, 'perPage': perPage});
-    final list = (data['Page']['media'] as List).cast<Map<String, dynamic>>();
-    return list.map(AnimeCard.fromJson).toList();
+    try {
+      final data = await _query(q, {'page': page, 'perPage': perPage});
+      final list = (data['Page']['media'] as List).cast<Map<String, dynamic>>();
+      return list.map(AnimeCard.fromJson).toList();
+    } catch (e) {
+      final st = RegExp(r'status:\s*(\w+)').firstMatch(extraFilter)?.group(1);
+      final rows = await KitsuFallback.list(
+          sort: sort, status: st, page: page, perPage: perPage);
+      return rows.map(AnimeCard.fromJson).toList();
+    }
   }
 
   Future<List<AnimeCard>> search(String term, {int page = 1, int perPage = 30}) async {
@@ -121,11 +144,16 @@ class AnimeService {
         }
       }
     ''';
-    final data = await _query(q, {'q': term, 'page': page, 'perPage': perPage});
-    return (data['Page']['media'] as List)
-        .cast<Map<String, dynamic>>()
-        .map(AnimeCard.fromJson)
-        .toList();
+    try {
+      final data = await _query(q, {'q': term, 'page': page, 'perPage': perPage});
+      return (data['Page']['media'] as List)
+          .cast<Map<String, dynamic>>()
+          .map(AnimeCard.fromJson)
+          .toList();
+    } catch (e) {
+      final rows = await KitsuFallback.list(search: term, page: page, perPage: perPage);
+      return rows.map(AnimeCard.fromJson).toList();
+    }
   }
 
   Future<AnimeCard> getDetails(int anilistId) async {
@@ -136,11 +164,29 @@ class AnimeService {
         }
       }
     ''';
-    final data = await _query(q, {'id': anilistId});
-    return AnimeCard.fromJson(data['Media'] as Map<String, dynamic>);
+    try {
+      final data = await _query(q, {'id': anilistId});
+      return AnimeCard.fromJson(data['Media'] as Map<String, dynamic>);
+    } catch (e) {
+      final row = await KitsuFallback.byAnilistId(anilistId);
+      if (row == null) rethrow;
+      return AnimeCard.fromJson(row);
+    }
   }
 
+  // Related titles and season chains need AniList's relation graph, which the
+  // Kitsu backup can't give in the same shape, so they just come back empty
+  // while AniList is off.
   Future<List<AnimeCard>> getRelations(int anilistId) async {
+    try {
+      return await _getRelationsAniList(anilistId);
+    } catch (e) {
+      debugPrint('[Anime] relations unavailable: $e');
+      return [];
+    }
+  }
+
+  Future<List<AnimeCard>> _getRelationsAniList(int anilistId) async {
     final q = '''
       query (\$id: Int) {
         Media(id: \$id, type: ANIME) {
@@ -172,6 +218,15 @@ class AnimeService {
   /// Result is ordered chronologically (root → latest) and ALWAYS includes
   /// the input anime. Returns just the input if no chain neighbors exist.
   Future<List<AnimeCard>> getSeasons(int anilistId) async {
+    try {
+      return await _getSeasonsAniList(anilistId);
+    } catch (e) {
+      debugPrint('[Anime] seasons unavailable: $e');
+      return [];
+    }
+  }
+
+  Future<List<AnimeCard>> _getSeasonsAniList(int anilistId) async {
     const q = r'''
       query ($id: Int) {
         Media(id: $id, type: ANIME) {
@@ -306,11 +361,26 @@ class AnimeService {
         }
       }
     ''';
-    final data = await _query(q, {'page': page, 'perPage': perPage});
-    return (data['Page']['media'] as List)
-        .cast<Map<String, dynamic>>()
-        .map(AnimeCard.fromJson)
-        .toList();
+    try {
+      final data = await _query(q, {'page': page, 'perPage': perPage});
+      return (data['Page']['media'] as List)
+          .cast<Map<String, dynamic>>()
+          .map(AnimeCard.fromJson)
+          .toList();
+    } catch (e) {
+      final rows = await KitsuFallback.list(
+        sort: sort,
+        status: status,
+        genre: genre,
+        year: year,
+        season: season,
+        format: format,
+        adult: isAdult,
+        page: page,
+        perPage: perPage,
+      );
+      return rows.map(AnimeCard.fromJson).toList();
+    }
   }
 
   // ─── Episodes (real IDs from Anikoto API) ───────────────────────

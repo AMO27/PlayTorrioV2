@@ -14,6 +14,27 @@ clearer error messages so a failure says *why* instead of spinning forever,
 and keeps Windows and iPhone builds working. Builds are manual-only (run the
 workflow when you want one) so a push never starts a build by surprise.
 
+## 2026-10-21
+
+### Anime
+- **AniList switched its API off ("temporarily disabled")**, which broke every
+  anime page. The app now falls back to Kitsu for the home lists, search, browse
+  and details, keeping AniList IDs so episodes and streams still work. It stops
+  asking AniList for 5 minutes after a refusal and returns to it automatically.
+  "Related" and "Seasons" stay empty until AniList is back.
+
+### Comics
+- **New comic source: BatCave** (batcave.biz) replaces the old comics site that
+  shut down. Full series with every issue, search and paging, read in-app. If
+  BatCave fails, the app falls back to Read Free Comics (readfreecomicsonline.com)
+  automatically.
+- **GetComics for downloads.** A "Downloads (GetComics)" chip under the Comics
+  title switches to getcomics.org (browse and search). Its "Download now" button
+  saves the file inside the app; the other mirror buttons open in the browser.
+- **Downloads inside the Comics section.** Every BatCave / Read Free Comics issue has
+  a download arrow and is saved page by page, readable offline. The new download icon in the Comics
+  header lists everything saved, opens it and deletes it.
+
 ## 2026-10-14
 
 ### Music

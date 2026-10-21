@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'local_server_service.dart';
 import 'comic_page_extractor.dart';
 import 'readcomicsonline_scraper.dart';
+import 'extra_comic_sources.dart';
 
 class Comic {
   final String title;
@@ -94,38 +95,43 @@ class ComicsUnavailableException implements Exception {
 }
 
 class ComicsService {
+  /// 'getcomics' = Downloads mode (GetComics catalogue); '' = reading mode
+  /// (BatCave, with Read Free Comics as the backup).
+  static final ValueNotifier<String> activeSource = ValueNotifier<String>('');
+
   static const String _baseUrl = 'https://rcostation.xyz';
   static const Duration _timeout = Duration(seconds: 15);
   static const String _likedKey = 'liked_comics';
 
-  /// Main listing. readcomiconline.xyz is the primary source; rcostation.xyz
-  /// (which no longer resolves) is kept only as a fallback in case it returns.
+  /// Main listing: BatCave, with Read Free Comics as the backup.
   Future<List<Comic>> getComics({int page = 1}) async {
-    ComicsUnavailableException? primaryError;
+    if (activeSource.value == GetComicsScraper.sourceTag) {
+      return GetComicsScraper.getComics(page: page);
+    }
+    // BatCave is the main source; Read Free Comics is the backup.
     try {
-      final comics = await ReadComicsOnlineScraper.getComics(page: page);
-      if (comics.isNotEmpty) return comics;
-      if (page > 1) return comics; // ran past the last page
-    } on ComicsUnavailableException catch (e) {
-      primaryError = e;
+      final comics = await BatcaveScraper.getComics(page: page);
+      if (comics.isNotEmpty || page > 1) return comics;
     } catch (e) {
-      primaryError = ComicsUnavailableException('Unexpected error: $e');
+      debugPrint('[Comics] BatCave failed, trying Read Free Comics: $e');
     }
-
-    try {
-      return await _getComicsRco(page: page);
-    } on ComicsUnavailableException {
-      // Report the primary source's reason — the fallback is known-dead.
-      throw primaryError ??
-          ComicsUnavailableException('No comics source is reachable right now.');
-    }
+    return ReadFreeComicsScraper.getComics(page: page);
   }
 
   /// The comics homepage's trending list (readcomiconline.xyz's own
   /// "Popular" ordering — there is no cross-site "comics chart" the way
   /// Apple Music publishes one for songs).
   Future<List<Comic>> getTrendingComics({int page = 1}) async {
-    return ReadComicsOnlineScraper.getTrendingComics(page: page);
+    if (activeSource.value == GetComicsScraper.sourceTag) {
+      return GetComicsScraper.getComics(page: page);
+    }
+    try {
+      final comics = await BatcaveScraper.getTrendingComics(page: page);
+      if (comics.isNotEmpty || page > 1) return comics;
+    } catch (e) {
+      debugPrint('[Comics] BatCave trending failed, trying Read Free Comics: $e');
+    }
+    return ReadFreeComicsScraper.getComics(page: page);
   }
 
   Future<List<Comic>> _getComicsRco({int page = 1}) async {
@@ -163,23 +169,12 @@ class ComicsService {
   }
 
   Future<List<Comic>> searchComics(String query) async {
-    // Run both sources in parallel and merge, deduping by normalized title.
-    final results = await Future.wait<List<Comic>>([
-      _searchRco(query),
-      ReadComicsOnlineScraper.searchComics(query),
-    ]);
-
-    final seen = <String>{};
-    final merged = <Comic>[];
-    for (final list in results) {
-      for (final c in list) {
-        final key = c.title.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (key.isEmpty || seen.contains(key)) continue;
-        seen.add(key);
-        merged.add(c);
-      }
+    if (activeSource.value == GetComicsScraper.sourceTag) {
+      return GetComicsScraper.searchComics(query);
     }
-    return merged;
+    final batcave = await BatcaveScraper.searchComics(query);
+    if (batcave.isNotEmpty) return batcave;
+    return ReadFreeComicsScraper.searchComics(query);
   }
 
   Future<List<Comic>> _searchRco(String query) async {
@@ -204,6 +199,18 @@ class ComicsService {
   }
 
   Future<ComicDetails?> getComicDetails(Comic comic) async {
+    if (comic.source == GetComicsScraper.sourceTag ||
+        GetComicsScraper.ownsUrl(comic.url)) {
+      return GetComicsScraper.getComicDetails(comic);
+    }
+    if (comic.source == ReadFreeComicsScraper.sourceTag ||
+        ReadFreeComicsScraper.ownsUrl(comic.url)) {
+      return ReadFreeComicsScraper.getComicDetails(comic);
+    }
+    if (comic.source == BatcaveScraper.sourceTag ||
+        BatcaveScraper.ownsUrl(comic.url)) {
+      return BatcaveScraper.getComicDetails(comic);
+    }
     // Dispatch by source / host.
     if (comic.source == ReadComicsOnlineScraper.sourceTag ||
         ReadComicsOnlineScraper.ownsUrl(comic.url)) {
@@ -290,6 +297,12 @@ class ComicsService {
 
   Future<List<String>> getChapterPages(String chapterUrl, ComicPageExtractor extractor) async {
     // Dispatch by host.
+    if (ReadFreeComicsScraper.ownsUrl(chapterUrl)) {
+      return ReadFreeComicsScraper.getChapterPages(chapterUrl);
+    }
+    if (BatcaveScraper.ownsUrl(chapterUrl)) {
+      return BatcaveScraper.getChapterPages(chapterUrl);
+    }
     if (ReadComicsOnlineScraper.ownsUrl(chapterUrl)) {
       return ReadComicsOnlineScraper.getChapterPages(chapterUrl);
     }

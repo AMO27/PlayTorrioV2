@@ -216,6 +216,10 @@ class LocalServerService {
       final host = Uri.parse(targetUrl).host;
       if (host.contains('readcomiconline.xyz') || host.endsWith('wp.com')) {
         referer = 'https://readcomiconline.xyz/';
+      } else if (host.contains('readfreecomicsonline.com')) {
+        referer = 'https://readfreecomicsonline.com/';
+      } else if (host.contains('batcave.biz')) {
+        referer = 'https://batcave.biz/';
       } else if (host.contains('readcomicsonline.ru')) {
         referer = 'https://readcomicsonline.ru/';
       } else if (host.contains('readcomiconline.li')) {

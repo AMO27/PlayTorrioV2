@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'comic_details_screen.dart';
 import 'comic_reader_screen.dart';
 import '../api/comics_service.dart';
+import 'comic_downloads_screen.dart';
 import '../utils/app_theme.dart';
 
 class ComicsScreen extends StatefulWidget {
@@ -191,6 +192,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
           children: [
             const SizedBox(height: 24),
             _buildHeader(),
+            _buildSourcePicker(),
             _buildSearchBar(),
             Expanded(
               child: RefreshIndicator(
@@ -245,6 +247,14 @@ class _ComicsScreenState extends State<ComicsScreen> {
                 tooltip: _isShowingTrending ? 'Show All' : 'Trending',
               ),
               IconButton(
+                icon: const Icon(Icons.download_done_rounded, color: Colors.white, size: 28),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ComicDownloadsScreen()),
+                ),
+                tooltip: 'Downloads',
+              ),
+              IconButton(
                 icon: Icon(
                   _isShowingLiked ? Icons.favorite : Icons.favorite_border,
                   color: _isShowingLiked ? Colors.redAccent : Colors.white,
@@ -263,6 +273,36 @@ class _ComicsScreenState extends State<ComicsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSourcePicker() {
+    return ValueListenableBuilder<String>(
+      valueListenable: ComicsService.activeSource,
+      builder: (context, active, _) {
+        Widget chip(String tag, String label) => Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(label),
+                selected: active == tag,
+                onSelected: (_) {
+                  if (active == tag) return;
+                  ComicsService.activeSource.value = tag;
+                  _currentPage = 1;
+                  _searchController.clear();
+                  _currentSearchQuery = '';
+                  _fetchComics(trending: _isShowingTrending);
+                },
+              ),
+            );
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Row(children: [
+            chip('', 'Read (BatCave)'),
+            chip('getcomics', 'Downloads (GetComics)'),
+          ]),
+        );
+      },
     );
   }
 
